@@ -24,7 +24,7 @@ Use $tabular-classification-report. Run Checkpoint 1 only on /absolute/path/trai
 target label. Keep /absolute/path/test.csv sealed. Save outputs under /absolute/path/run1.
 ```
 
-You can also request an end-to-end training analysis from a dataset path; the agent asks about an ambiguous target and stops for Model Lock approval before held-out access. With no test file, it can generate a development-only report. See [checkpoint commands](references/checkpoint-workflow.md).
+You can also request the entire analysis from a dataset path. The agent still stops after Checkpoints 1, 2 and 3 for your explicit review; a request to run both train and test data does not waive these stops. The agent asks about an ambiguous target and requires approval of the exact Model Lock before held-out access. With no test file, it can generate a development-only report after the required reviews. See [checkpoint commands](references/checkpoint-workflow.md).
 
 The agent chooses the plan; Python executes it. Six model families, binary/multiclass targets, configurable metrics and per-model preprocessing are supported. Grouped and forward-time nested CV are available. Unsupported models or data structures are rejected explicitly and require a tested extension. This is not an unlimited AutoML package. See [plan contract](references/model-plan-schema.md).
 
