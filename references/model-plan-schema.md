@@ -15,7 +15,7 @@ Top-level fields:
 | seed | Nonnegative integer |
 | cv | strategy, outer_splits and inner_splits (2–10); see below |
 | metrics | primary string; secondary list, unique across both |
-| models | Exactly two named model specifications |
+| models | Exactly two named model specifications in this implementation (not an explicit Variant 2 limit) |
 | decision_trace | Nonempty list of observation/decision/rationale/human_review_point strings |
 | sensitivities | Zero to three predeclared sensitivity specifications |
 
