@@ -9,8 +9,8 @@
   "exploration": "Describe observed training issues and how missing targets, duplicate entities and potential leakage were handled.",
   "preprocessing": "Explain the data-based reasons for each model's imputation, encoding and scaling choices.",
   "features": "Explain feature exclusions/engineering, or justify retaining all eligible predictors.",
-  "model_rationale": "Explain the contrast between the selected classifiers and the bounded search/stopping settings.",
-  "findings": "Interpret saved validation/test results without changing model decisions. Discuss variation and generalization.",
+  "model_rationale": "Explain why each classifier was a suitable candidate, its expected strength and limitation, and the bounded search and explicit stopping rule.",
+  "findings": "Interpret verified validation/test results without changing model decisions. Distinguish numerical ranking from meaningful superiority; discuss fold variability and generalization.",
   "limitations": "State unknown domain meaning/error costs, remaining provenance concerns and validation limitations.",
   "reflection": {
     "human_oversight": "Pending: student should describe checkpoints actually reviewed and decisions actually made.",

@@ -4,11 +4,19 @@ Run commands from the skill root with a Python environment containing `requireme
 
 Use the [review mode selected at startup](../SKILL.md#choose-the-review-mode). Staged review is the default; continuous execution requires an explicit choice. At each staged pause, show concrete results, review points and what approval would start next. A user-requested checkpoint limit applies in either mode.
 
+## 0. Target resolution and input validation
+
+Inspect training schema before supervised diagnosis:
+
+`python scripts/inspect_training_schema.py --train /data/train.csv --output /runs/run1/schema.json`
+
+If the user or authoritative assignment/task/dataset metadata explicitly supplies `label`, add `--target label` to validate it. Otherwise show the columns, ask for the target and stop. An absent specified column also stops the workflow; do not silently substitute another. Record the source of the target choice. Column order, label-like names, apparent class count, filenames, associations and prior examples are not task semantics. Do not inspect any held-out file to resolve the target.
+
 ## 1. Training diagnosis
 
 `python scripts/diagnose_training.py --train /data/train.csv --target label --output /runs/run1/diagnosis.json`
 
-Excel adds `--sheet Data`. Diagnose training only. Ask about ambiguous target, dependent observations or unresolved high-risk feature provenance. In staged review, show the diagnosis and stop before drafting a plan; approval starts Checkpoint 2. In continuous execution, explain the findings and proceed if no blocking uncertainty remains.
+Excel adds `--sheet Data` to schema inspection and diagnosis. The diagnosis CLI requires the resolved target and does not infer it. Diagnose training only. Ask about dependent observations or unresolved high-risk feature provenance. In staged review, show observations, uncertainties, candidate leakage/provenance issues, and a reasonable challenge point; stop before drafting a plan. Approval starts Checkpoint 2. In continuous execution, explain the findings and proceed if no blocking uncertainty remains.
 
 ## 2. Modelling plan
 
@@ -16,13 +24,13 @@ Use `tests/fixtures/example-plan.json` as a schema example, not as a default exp
 
 `python scripts/validate_plan.py /runs/run1/plan.json`
 
-Explain models, preprocessing, metrics, features, splits, tuning limits, stopping criteria and sensitivity rationales. Validation does not fit models. In staged review, show the validated plan and stop; approval starts Checkpoint 3 model fitting. In continuous execution, explain the plan and proceed within its declared limits.
+Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. The plan proposes candidates, not a proven winner. Validation does not fit models. In staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. In continuous execution, explain the plan and proceed within its declared limits.
 
-## 3. Development and Model Lock
+## 3. Development and optional Model Lock
 
 `python scripts/run_nested_cv.py --train /data/train.csv --plan /runs/run1/plan.json --output-dir /runs/run1/development`
 
-The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Review `training_results.json`, fold scores and warnings. Write `review.json`:
+The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Inner CV selects hyperparameters; outer CV evaluates the tuned procedure. Review `training_results.json`, fold variability, near-ties, numeric-grid boundary flags, warnings and any sensitivities. Do not automatically widen an edge-hit grid or treat a tiny score difference as proof of superiority. If an independent holdout exists, write `review.json`:
 
 ```json
 {
@@ -36,7 +44,7 @@ The development directory must be empty. All candidate and sensitivity preproces
 
 `python scripts/freeze_model_lock.py --results /runs/run1/development/training_results.json --model-dir /runs/run1/development --review /runs/run1/review.json --output /runs/run1/model-lock.json`
 
-Show training results, all frozen configurations, remaining uncertainties and the printed digest. In both modes, stop before accessing the test file until this exact lock is approved; approval starts Checkpoint 4. Selecting continuous execution is not approval of a lock that has not yet been displayed.
+Show training results, all frozen configurations, remaining uncertainties, challengeable alternatives and the printed digest. In both modes, stop before accessing the test file until this exact lock is approved; approval starts Checkpoint 4. Selecting continuous execution is not approval of a lock that has not yet been displayed. With training data only, skip the lock and held-out approval; staged review still pauses after development before reporting.
 
 ## 4. Approval, one-time evaluation and report
 

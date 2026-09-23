@@ -16,6 +16,24 @@ from common import (PrimaryScorer, code_hashes, environment, features, load_tabl
 from validate_plan import validate
 
 
+def numeric_grid_boundaries(grid, selected):
+    """Flag selected edges of prespecified numeric grids without extending them."""
+    edges = {}
+    for parameter, values in grid.items():
+        if len(values) < 2 or any(isinstance(v, (bool, np.bool_)) or
+                                   not isinstance(v, (int, float, np.integer, np.floating)) for v in values):
+            continue
+        ordered = sorted(set(values))
+        if len(ordered) < 2:
+            continue
+        choice = selected[parameter]
+        edge = "lower" if choice == ordered[0] else "upper" if choice == ordered[-1] else None
+        if edge:
+            edges[parameter] = {"selected": choice, "edge": edge,
+                                "evaluated_min": ordered[0], "evaluated_max": ordered[-1]}
+    return edges
+
+
 def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
     plan = validate(read_json(plan_path))
     output_dir = Path(output_dir)
@@ -95,7 +113,8 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                     search.fit(x.iloc[a], y[a])
                     pred, prob = predictions(search, x.iloc[b], order, p)
                     fold = score_metrics(y[b], pred, prob, order, p)
-                    fold.update(fold=i + 1, best_params=search.best_params_)
+                    fold.update(fold=i + 1, best_params=search.best_params_,
+                                tuning_boundary=numeric_grid_boundaries(spec["grid"], search.best_params_))
                     folds.append(fold)
                     records.extend({"source_row": int(source_rows[row]), "fold": i + 1,
                                     "actual": str(y[row]), "prediction": str(pred[j]), "probabilities": prob[j].tolist()}
@@ -119,6 +138,7 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                                   "defined_folds": sum(v is not None for v in values)}
                 vr["models"][spec["name"]] = {
                     "type": spec["type"], "best_params": search.best_params_,
+                    "tuning_boundary": numeric_grid_boundaries(spec["grid"], search.best_params_),
                     "estimator_params": search.best_estimator_.named_steps["model"].get_params(),
                     "final_inner_selection_score": float(-search.best_score_ if metric == "log_loss" else search.best_score_),
                     "outer_summary": summary, "fold_results": folds, "oof_rows": len(records),

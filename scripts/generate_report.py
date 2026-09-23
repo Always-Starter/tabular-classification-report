@@ -62,12 +62,17 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     add(0, "Preprocessing and feature decisions", n["preprocessing"] + " " + n["features"])
     for spec in p["models"]:
         model = vr["models"][spec["name"]]
+        boundary = model.get("tuning_boundary", {})
         add(0, f"Model: {spec['name']} ({spec['type']})", "Preprocessing: " + json.dumps(spec["preprocessing"], ensure_ascii=False)
             + ". Selected parameters: " + json.dumps(model["best_params"], ensure_ascii=False)
-            + ". Fixed parameters: " + json.dumps(spec["params"], ensure_ascii=False) + ".")
+            + ". Fixed parameters: " + json.dumps(spec["params"], ensure_ascii=False) + "."
+            + (" Numeric search edge: " + ", ".join(f"{key}={value['selected']} ({value['edge']})"
+                 for key, value in boundary.items()) + "; values beyond this edge were not evaluated."
+               if boundary else ""))
     add(0, "Model choice and stopping rules", n["model_rationale"]
         + f" Limited grid search; {tr['planned_fits']} planned fits across baseline and declared sensitivities. "
-        + "No early stopping is inferred; estimator stopping settings and resolved defaults are saved in training_results.json.")
+        + "Tuning stopped after the prespecified inner-CV search; outer folds did not expand grids or change the primary metric. "
+        + "Estimator stopping settings and resolved defaults remain in training_results.json.")
     metric = p["metrics"]["primary"]
     add(1, "Evaluation and comparison", f"Primary metric: {metric} ({'lower' if metric == 'log_loss' else 'higher'} is better). "
         f"Nested CV: {p['cv']['strategy']}, {p['cv']['outer_splits']} outer / {p['cv']['inner_splits']} inner folds; seed {p['seed']}. "
@@ -101,9 +106,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
             add(1, f"Confusion matrix: {name}", f"Rows=true, columns=predicted; order={test['class_order']}; "
                 + json.dumps(model["confusion_matrix"]) + (". Undefined metrics: " + json.dumps(model["undefined_metrics"]) if model["undefined_metrics"] else ""))
     add(1, "Findings and discussion", n["findings"])
-    add(1, "Limitations and reproducibility", n["limitations"] + f" Selected development variant: {variant}. "
-        + f"Python {tr['environment']['python']}; scikit-learn {tr['environment']['packages']['scikit-learn']}. "
-        + "Plans, folds, model files, predictions, exact package versions and SHA-256 evidence accompany this report.")
+    add(1, "Limitations", n["limitations"] + f" Selected development variant: {variant}.")
     add(2, "Reflection - outside the two-page report limit", "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection")
     for k in reflection_keys:
         add(2, k.replace("_", " ").title(), n["reflection"][k])

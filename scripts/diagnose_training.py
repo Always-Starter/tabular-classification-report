@@ -43,7 +43,7 @@ def cramers_v(x, y):
 
 def diagnose(frame, target):
     if target not in frame.columns:
-        raise KeyError(f"Target column {target!r} was not found")
+        raise ValueError(f"Specified target {target!r} is absent. Available columns: {list(frame.columns)}")
     predictors = frame.drop(columns=[target])
     labels = frame[target]
     valid = labels.notna()

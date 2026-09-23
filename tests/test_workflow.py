@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from common import (ESTIMATORS, features, load_table, pipeline, predictions, read_json,
                     score_metrics, sha, splits, write_json)
 from validate_plan import validate
-from run_nested_cv import run
+from run_nested_cv import numeric_grid_boundaries, run
 from freeze_model_lock import freeze
 from approve_model_lock import approve
 from evaluate_holdout import evaluate
@@ -42,6 +42,16 @@ def frame(n=120, multiclass=False):
 
 
 class Contracts(unittest.TestCase):
+    def test_numeric_grid_boundaries_only_report_uncertainty(self):
+        grid = {"model__C": [0.1, 1.0, 10.0], "model__criterion": ["gini", "entropy"],
+                "model__single": [7]}
+        upper = numeric_grid_boundaries(grid, {"model__C": 10.0,
+                                               "model__criterion": "gini", "model__single": 7})
+        self.assertEqual(upper, {"model__C": {"selected": 10.0, "edge": "upper",
+                                               "evaluated_min": 0.1, "evaluated_max": 10.0}})
+        self.assertEqual(numeric_grid_boundaries(grid, {"model__C": 1.0,
+                                                         "model__criterion": "gini", "model__single": 7}), {})
+
     def test_invalid_plans_fail_before_fitting(self):
         cases = []
         p = example(); p["features"].append("label"); cases.append(p)
@@ -182,6 +192,8 @@ class Workflow(unittest.TestCase):
         for v in self.results["variants"].values():
             for model in v["models"].values():
                 self.assertEqual(model["oof_rows"], 120)
+                self.assertIn("tuning_boundary", model)
+                self.assertTrue(all("tuning_boundary" in fold for fold in model["fold_results"]))
         m = joblib.load(self.development / "baseline/linear.joblib")
         learned = m.named_steps["preprocess"].named_transformers_["numeric"].named_steps["imputer"].statistics_
         self.assertTrue(np.allclose(learned, frame()[["x1", "x2"]].median().to_numpy()))
@@ -283,6 +295,9 @@ class Workflow(unittest.TestCase):
             self.assertEqual(manifest["main_pages"], 2)
             self.assertTrue(manifest["draft"])
             self.assertGreaterEqual(manifest["total_pages"], 3)
+            report = (tmp / "report/report.md").read_text(encoding="utf-8")
+            self.assertIn("Tuning stopped after the prespecified inner-CV search", report)
+            self.assertNotIn("SHA-256 evidence accompany this report", report)
             # Verification uses stored predictions, even when the test file is no longer available.
             test.rename(tmp / "sealed-away.tsv")
             self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])

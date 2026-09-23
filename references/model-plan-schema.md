@@ -50,6 +50,8 @@ Preprocessing requires:
 
 Only estimator parameters are tuned in `grid`. Use a declared sensitivity for preprocessing/feature/threshold alternatives. Empty grid `{}` means one fixed candidate. Up to 16 candidates per model; default total budget 1200 fits including refits and sensitivities. Estimator seeds are controlled by the top-level seed; internal jobs are 1. Unspecified estimator defaults are resolved and saved in training results; package versions are recorded. This runner produces dense encoded features and rejects a conservative estimated matrix above 512 MiB; high-cardinality/sparse datasets may need an extension.
 
+Before fitting, justify the primary metric, each candidate family and per-model preprocessing from the training diagnosis. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. For numeric grids with at least two distinct values, development results save `tuning_boundary` for outer-fold and final-inner choices at the lowest/highest evaluated value. This is uncertainty disclosure, not permission to extend a search after reviewing outer/test scores.
+
 ## Sensitivities
 
 Each object contains `name`, `rationale`, `overrides`. Overrides may replace only `features`, `numeric_features`, `categorical_features`, `excluded_features`, `models`, or binary `threshold`. Overrides replace whole fields, not recursive fragments. Preserve model names/order, target, metrics and CV. Every variant is independently validated, evaluated on identical splits, fitted on full training and saved. Select one variant in the lock review; never silently promote a model based on test performance.
