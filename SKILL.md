@@ -20,9 +20,20 @@ For every material choice, record **Observation → Decision → Rationale → H
 - Freeze both complete fitted pipelines before held-out access. Record actual human approval of the displayed lock digest before calling the evaluator. Never create an approval on the user's behalf without their explicit approval of that lock.
 - The receipt and hashes enforce normal workflow checks, not security against someone deliberately editing/deleting the files. Preserve them. Never rerun or remove a receipt to improve test performance.
 
+## Choose the review mode
+
+At the start of a run, honour an explicit mode choice already made for that run. Otherwise briefly offer these two modes in the user's language and state that staged review is the default:
+
+- **Staged review (default; recommended for first use):** show the diagnosis after Checkpoint 1, the proposed plan after Checkpoint 2, and the training results and Model Lock after Checkpoint 3. Stop at each boundary and wait for the user's approval or requested changes before proceeding.
+- **Continuous execution:** make and explain the intermediate decisions and complete Checkpoints 1–3 without routine approval pauses. Still show the exact Model Lock and wait for explicit approval before accessing a held-out test file. This mode does not authorise unattended test evaluation.
+
+If no mode is selected, announce staged review and proceed only as far as Checkpoint 1; do not block the diagnosis merely to collect a mode choice. A broad request such as “run the whole analysis” or providing both train and test paths does not select continuous execution. Keep the chosen mode for the run instead of asking at every checkpoint. Honour later requests to stop or switch modes, and narrower limits such as “Checkpoint 1 only”, in either mode. Stop for unresolved target/provenance issues that could invalidate the experiment in either mode.
+
+At every review pause, present the actual results and artifact links, explain the material decisions and uncertainties, identify what the user needs to review, and state exactly what approval would start next. Ask only for information the user may know; allow “unknown” and disclose resulting assumptions or limitations. Do not treat silence as approval or claim a manual check the user has not performed.
+
 ## Workflow and routing
 
-Read [checkpoint-workflow.md](references/checkpoint-workflow.md) for commands and stop boundaries. Honour requests such as “Checkpoint 1 only”. In checkpoint mode, pause after each stage. For an end-to-end request, stages 1–3 may run without repeated confirmations when choices are resolvable; still present the lock and obtain approval before stage 4. Stop for unresolved target/provenance issues that could invalidate the experiment.
+Read [checkpoint-workflow.md](references/checkpoint-workflow.md) for commands and apply the selected review mode at each boundary.
 
 1. **Diagnose training data.** Run `scripts/diagnose_training.py` with only the training path. Inspect missingness, class balance, duplicates, numeric ranges, cardinality and descriptive associations. Explain domain uncertainty and candidate leakage. This CLI has no test-path option.
 2. **Propose the plan.** Read [modelling-decisions.md](references/modelling-decisions.md) and [model-plan-schema.md](references/model-plan-schema.md). Select two informative classifiers, per-model preprocessing, feature exclusions, primary/secondary metrics, splits, bounded grids and justified sensitivities. Write a schema-v2 JSON plan and validate with `scripts/validate_plan.py`. No fitting at this stage.
@@ -39,4 +50,4 @@ When the dataset needs an unsupported method, explain the limitation and extend 
 
 ## IN6227 Variant 2
 
-The assignment requires data-specific AI model/preprocessing selection, two-model comparison, reusable execution and automated reporting. Four pauses, nested CV and Model Lock are this skill's design choices, not quoted grading requirements. Include full name, matric number, `IN6227-Assignment-1`, `Variant-2`, actual verifiable LLM model/version, interface and GitHub URL in the report. The main PDF is at most two pages; Reflection follows in the same PDF and is outside that limit. Reflection must describe real human oversight, a challenged decision and a specific manually checked output. Automated verification can supply a calculation for the student to check, but cannot claim the student did so.
+The assignment requires data-specific AI model/preprocessing selection, two-model comparison, reusable execution and automated reporting. Review modes, nested CV and Model Lock are this skill's design choices, not quoted grading requirements. Include full name, matric number, `IN6227-Assignment-1`, `Variant-2`, actual verifiable LLM model/version, interface and GitHub URL in the report. The main PDF is at most two pages; Reflection follows in the same PDF and is outside that limit. Reflection must describe real human oversight, a challenged decision and a specific manually checked output. Automated verification can supply a calculation for the student to check, but cannot claim the student did so.

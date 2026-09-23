@@ -19,12 +19,32 @@ Use a fresh destination; do not nest a copy inside an existing skill. A symlink 
 
 ## Try it yourself
 
+You do not need to know checkpoint names. At the start, the agent explains two modes and asks which you prefer unless you have already chosen one for this run:
+
+| Mode | When the agent pauses | Suitable for |
+| --- | --- | --- |
+| Staged review (default) | After the data diagnosis, after the modelling plan, and after training results and Model Lock | First use, learning and reviewing decisions |
+| Continuous execution | Before held-out evaluation, after presenting the Model Lock; also when a blocking issue needs your input | Users who want the agent to make intermediate decisions |
+
+If you do not choose a mode, the agent announces staged review, performs the diagnosis and stops for your review. At each pause it shows results, explains what needs your review and states the next action. You can request a pause or switch modes during the run. A general request to “run everything” does not select continuous execution.
+
+For staged review:
+
 ```text
-Use $tabular-classification-report. Run Checkpoint 1 only on /absolute/path/train.csv,
-target label. Keep /absolute/path/test.csv sealed. Save outputs under /absolute/path/run1.
+Use $tabular-classification-report in staged review mode on /absolute/path/train.csv,
+target label. The held-out file is /absolute/path/test.csv.
+Save outputs under /absolute/path/run1.
 ```
 
-You can also request an end-to-end training analysis from a dataset path; the agent asks about an ambiguous target and stops for Model Lock approval before held-out access. With no test file, it can generate a development-only report. See [checkpoint commands](references/checkpoint-workflow.md).
+For continuous execution:
+
+```text
+Use $tabular-classification-report in continuous execution mode on
+/absolute/path/train.csv, target label. The held-out file is /absolute/path/test.csv.
+Save outputs under /absolute/path/run2. Show the Model Lock for my approval before testing.
+```
+
+In either mode, the held-out data stays sealed until you approve the displayed Model Lock. Continuous execution therefore does not mean unattended test evaluation. You can also request a specific limit, such as “Checkpoint 1 only”; the agent honours it in either mode. With no test file, staged review still pauses after training results before reporting, while continuous execution proceeds to a development-only report. See [checkpoint commands](references/checkpoint-workflow.md).
 
 The agent chooses the plan; Python executes it. Six model families, binary/multiclass targets, configurable metrics and per-model preprocessing are supported. Grouped and forward-time nested CV are available. Unsupported models or data structures are rejected explicitly and require a tested extension. This is not an unlimited AutoML package. See [plan contract](references/model-plan-schema.md).
 
