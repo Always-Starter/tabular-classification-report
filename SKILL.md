@@ -11,6 +11,8 @@ Use the installed skill directory for scripts and references. Save each experime
 
 For every material choice, record **Observation → Decision → Rationale → Human-review point**. Ground decisions in the supplied training data. Do not infer customer churn, business meanings or label meanings from an example, filename or prior demonstration.
 
+Use **English by default** for the mode-choice prompt, checkpoint results, review questions, and generated report narrative. If the user's current request clearly uses another language, respond in that language; an explicit language preference takes precedence. When a request contains only paths, commands, or otherwise gives no clear language signal, use English. Follow a later language switch for subsequent messages. Do not carry an earlier conversation language into a new English-language request, and do not translate dataset column names or observed label values.
+
 ## Invariants
 
 - Keep all held-out file contents sealed through diagnosis, planning and development; do not profile test predictors or labels. No test-based model revisions.
@@ -22,7 +24,7 @@ For every material choice, record **Observation → Decision → Rationale → H
 
 ## Choose the review mode
 
-At the start of a run, honour an explicit mode choice already made for that run. Otherwise, **before reading the dataset or running a checkpoint**, show a separate, user-visible choice prompt in the user's language. Ask the user to pick one of these two modes; merely announcing the default does not count as offering a choice:
+At the start of a run, honour an explicit mode choice already made for that run. Otherwise, **before reading the dataset or running a checkpoint**, show a separate, user-visible choice prompt using the language rule above. Ask the user to pick one of these two modes; merely announcing the default does not count as offering a choice:
 
 - **Staged review (default; recommended for first use):** show the diagnosis after Checkpoint 1, the proposed plan after Checkpoint 2, and the training results and Model Lock after Checkpoint 3. Stop at each boundary and wait for the user's approval or requested changes before proceeding.
 - **Continuous execution:** make and explain the intermediate decisions and complete Checkpoints 1–3 without routine approval pauses. Still show the exact Model Lock and wait for explicit approval before accessing a held-out test file. This mode does not authorise unattended test evaluation.

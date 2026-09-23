@@ -19,6 +19,8 @@ Use a fresh destination; do not nest a copy inside an existing skill. A symlink 
 
 ## Try it yourself
 
+User-facing prompts and results default to English. If your current request is clearly in another language, the agent uses that language; you can also state a language preference explicitly. A new English-language request is answered in English even if earlier messages used another language. Dataset field names and label values stay as written in the data.
+
 You do not need to know checkpoint names. Unless you have already chosen a mode for this run, the agent must **show the following choice before it reads the dataset**. Simply telling you which mode it assumed does not fulfill this step:
 
 | Mode | When the agent pauses | Suitable for |
