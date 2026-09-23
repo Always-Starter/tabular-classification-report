@@ -1,24 +1,24 @@
 # Checkpoints and commands
 
-Run commands from the skill root with a Python environment containing `requirements.txt`. Paths below are examples to replace. Preserve each run directory; do not write into the skill or overwrite source data. After each checkpoint, show its concrete outputs and wait for explicit human review before running any command in the next checkpoint, even for a request to run the complete workflow.
+Run commands from the skill root with a Python environment containing `requirements.txt`. Paths below are examples to replace. Preserve each run directory; do not write into the skill or overwrite source data.
 
 ## 1. Training diagnosis
 
 `python scripts/diagnose_training.py --train /data/train.csv --target label --output /runs/run1/diagnosis.json`
 
-Excel adds `--sheet Data`. Diagnose training only. Report the findings, ask about ambiguous target, dependent observations or unresolved high-risk feature provenance, and stop for review. Do not draft or validate a plan yet.
+Excel adds `--sheet Data`. Diagnose training only. In checkpoint mode, report findings and pause. Ask about ambiguous target, dependent observations or unresolved high-risk feature provenance.
 
 ## 2. Modelling plan
 
-Only after Checkpoint 1 approval, use `tests/fixtures/example-plan.json` as a schema example, not as a default experiment. Write the actual plan from training evidence. Then:
+Use `tests/fixtures/example-plan.json` as a schema example, not as a default experiment. Write the actual plan from training evidence. Then:
 
 `python scripts/validate_plan.py /runs/run1/plan.json`
 
-Explain models, preprocessing, metrics, features, splits, tuning limits, stopping criteria and sensitivity rationales. Validation does not fit models. Stop for review; do not run cross-validation until this plan is explicitly approved.
+Explain models, preprocessing, metrics, features, splits, tuning limits, stopping criteria and sensitivity rationales. Validation does not fit models. In checkpoint mode, pause for review.
 
 ## 3. Development and Model Lock
 
-After Checkpoint 2 approval: `python scripts/run_nested_cv.py --train /data/train.csv --plan /runs/run1/plan.json --output-dir /runs/run1/development`
+`python scripts/run_nested_cv.py --train /data/train.csv --plan /runs/run1/plan.json --output-dir /runs/run1/development`
 
 The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Review `training_results.json`, fold scores and warnings. Write `review.json`:
 
