@@ -22,12 +22,14 @@ For every material choice, record **Observation → Decision → Rationale → H
 
 ## Choose the review mode
 
-At the start of a run, honour an explicit mode choice already made for that run. Otherwise briefly offer these two modes in the user's language and state that staged review is the default:
+At the start of a run, honour an explicit mode choice already made for that run. Otherwise, **before reading the dataset or running a checkpoint**, show a separate, user-visible choice prompt in the user's language. Ask the user to pick one of these two modes; merely announcing the default does not count as offering a choice:
 
 - **Staged review (default; recommended for first use):** show the diagnosis after Checkpoint 1, the proposed plan after Checkpoint 2, and the training results and Model Lock after Checkpoint 3. Stop at each boundary and wait for the user's approval or requested changes before proceeding.
 - **Continuous execution:** make and explain the intermediate decisions and complete Checkpoints 1–3 without routine approval pauses. Still show the exact Model Lock and wait for explicit approval before accessing a held-out test file. This mode does not authorise unattended test evaluation.
 
-If no mode is selected, announce staged review and proceed only as far as Checkpoint 1; do not block the diagnosis merely to collect a mode choice. A broad request such as “run the whole analysis” or providing both train and test paths does not select continuous execution. Keep the chosen mode for the run instead of asking at every checkpoint. Honour later requests to stop or switch modes, and narrower limits such as “Checkpoint 1 only”, in either mode. Stop for unresolved target/provenance issues that could invalidate the experiment in either mode.
+For example, ask: “How would you like to run this? A. Staged review (default): I pause after the diagnosis, plan and training results. B. Continuous execution: I make the intermediate decisions and pause at the Model Lock before using the test set. Which do you choose?” Use a choice/input control when available so the options are visible. If the question can remain open asynchronously and no answer has arrived, proceed under staged review only as far as Checkpoint 1; the question must already have been shown. If the interface cannot collect an asynchronous answer, wait for the user's choice before reading the dataset.
+
+A broad request such as “run the whole analysis” or providing both train and test paths does not select continuous execution. Keep the chosen mode for the run instead of asking at every checkpoint. Honour later requests to stop or switch modes, and narrower limits such as “Checkpoint 1 only”, in either mode. Stop for unresolved target/provenance issues that could invalidate the experiment in either mode.
 
 At every review pause, present the actual results and artifact links, explain the material decisions and uncertainties, identify what the user needs to review, and state exactly what approval would start next. Ask only for information the user may know; allow “unknown” and disclose resulting assumptions or limitations. Do not treat silence as approval or claim a manual check the user has not performed.
 

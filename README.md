@@ -19,14 +19,14 @@ Use a fresh destination; do not nest a copy inside an existing skill. A symlink 
 
 ## Try it yourself
 
-You do not need to know checkpoint names. At the start, the agent explains two modes and asks which you prefer unless you have already chosen one for this run:
+You do not need to know checkpoint names. Unless you have already chosen a mode for this run, the agent must **show the following choice before it reads the dataset**. Simply telling you which mode it assumed does not fulfill this step:
 
 | Mode | When the agent pauses | Suitable for |
 | --- | --- | --- |
 | Staged review (default) | After the data diagnosis, after the modelling plan, and after training results and Model Lock | First use, learning and reviewing decisions |
 | Continuous execution | Before held-out evaluation, after presenting the Model Lock; also when a blocking issue needs your input | Users who want the agent to make intermediate decisions |
 
-If you do not choose a mode, the agent announces staged review, performs the diagnosis and stops for your review. At each pause it shows results, explains what needs your review and states the next action. You can request a pause or switch modes during the run. A general request to “run everything” does not select continuous execution.
+The question is: “Choose staged review (default) or continuous execution?” If the interface lets you answer while the agent works and you have not answered yet, it performs only the diagnosis under staged review and stops for your review. Otherwise, it waits for your choice before reading the data. At each pause it shows results, explains what needs your review and states the next action. You can request a pause or switch modes during the run. A general request to “run everything” does not select continuous execution.
 
 For staged review:
 
