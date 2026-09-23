@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "target": "label",
+  "task": "binary",
+  "positive_class": "no",
+  "threshold": 0.5,
+  "features": [
+    "x1",
+    "x2",
+    "category"
+  ],
+  "numeric_features": [
+    "x1",
+    "x2"
+  ],
+  "categorical_features": [
+    "category"
+  ],
+  "excluded_features": {},
+  "seed": 1729,
+  "cv": {
+    "strategy": "stratified",
+    "outer_splits": 2,
+    "inner_splits": 2
+  },
+  "metrics": {
+    "primary": "f1",
+    "secondary": [
+      "accuracy",
+      "balanced_accuracy",
+      "precision",
+      "recall",
+      "roc_auc",
+      "average_precision"
+    ]
+  },
+  "models": [
+    {
+      "name": "linear",
+      "type": "logistic_regression",
+      "params": {
+        "max_iter": 3000
+      },
+      "grid": {
+        "model__C": [
+          0.1,
+          1
+        ]
+      },
+      "preprocessing": {
+        "numeric_imputer": "median",
+        "missing_indicator": true,
+        "numeric_transform": "none",
+        "scaler": "standard",
+        "categorical_imputer": "most_frequent",
+        "categorical_encoder": "onehot"
+      }
+    },
+    {
+      "name": "tree",
+      "type": "decision_tree",
+      "params": {
+        "max_depth": 3
+      },
+      "grid": {
+        "model__min_samples_leaf": [
+          1,
+          2
+        ]
+      },
+      "preprocessing": {
+        "numeric_imputer": "median",
+        "missing_indicator": true,
+        "numeric_transform": "none",
+        "scaler": "none",
+        "categorical_imputer": "most_frequent",
+        "categorical_encoder": "onehot"
+      }
+    }
+  ],
+  "decision_trace": [
+    {
+      "observation": "Synthetic fixture contains two classes and mixed numeric/categorical predictors.",
+      "decision": "Use an interpretable linear-versus-tree comparison; label 'no' is the positive class solely to test class-order handling.",
+      "rationale": "Exercise generic binary mechanics with a non-last positive class; this is not a plan for course data.",
+      "human_review_point": "Replace all fixture choices using the real training diagnosis, including error costs and positive class."
+    }
+  ],
+  "sensitivities": []
+}

@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "full_name": "",
+    "matric_number": "",
+    "llm_model_version": "",
+    "llm_interface": "",
+    "repository_url": ""
+  },
+  "exploration": "Describe observed training issues and how missing targets, duplicate entities and potential leakage were handled.",
+  "preprocessing": "Explain the data-based reasons for each model's imputation, encoding and scaling choices.",
+  "features": "Explain feature exclusions/engineering, or justify retaining all eligible predictors.",
+  "model_rationale": "Explain the contrast between the selected classifiers and the bounded search/stopping settings.",
+  "findings": "Interpret saved validation/test results without changing model decisions. Discuss variation and generalization.",
+  "limitations": "State unknown domain meaning/error costs, remaining provenance concerns and validation limitations.",
+  "reflection": {
+    "human_oversight": "Pending: student should describe checkpoints actually reviewed and decisions actually made.",
+    "challenged_decision": "Pending: identify a real decision challenged and explain agreement/disagreement.",
+    "manual_verification": "Pending: student should independently recompute a particular saved output; automated verification is not a manual check.",
+    "future_changes": "Pending: student should describe what they would change in a future independent experiment."
+  },
+  "human_reflection_confirmed": false
+}

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.joblib
+outputs/
+checkpoint*_results.json
+*_predictions.csv
+.DS_Store
+.venv/
+runs/
+output/
+*.approval.json
+*.holdout.json
+model-lock*.json
+training_results.json
+test_results.json
