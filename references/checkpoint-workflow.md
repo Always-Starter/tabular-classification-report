@@ -36,7 +36,7 @@ The development directory must be empty. All candidate and sensitivity preproces
 
 `python scripts/freeze_model_lock.py --results /runs/run1/development/training_results.json --model-dir /runs/run1/development --review /runs/run1/review.json --output /runs/run1/model-lock.json`
 
-Show training results, both frozen configurations, remaining uncertainties and the printed digest. In both modes, stop before accessing the test file until this exact lock is approved; approval starts Checkpoint 4. Selecting continuous execution is not approval of a lock that has not yet been displayed.
+Show training results, all frozen configurations, remaining uncertainties and the printed digest. In both modes, stop before accessing the test file until this exact lock is approved; approval starts Checkpoint 4. Selecting continuous execution is not approval of a lock that has not yet been displayed.
 
 ## 4. Approval, one-time evaluation and report
 

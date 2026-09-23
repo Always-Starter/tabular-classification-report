@@ -1,6 +1,6 @@
 # Tabular Classification Report
 
-A reusable Codex skill for selecting and comparing two classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, optional one-time held-out evaluation and automatic Markdown/PDF reporting. Comparing exactly two is this implementation's choice, not an explicit Variant 2 limit. No course dataset, model or assessment result is bundled.
+A reusable Codex skill for selecting and comparing two or three classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, optional one-time held-out evaluation and automatic Markdown/PDF reporting. Two is the usual choice; a third needs a distinct, documented comparison question. This range is an implementation choice, not an explicit Variant 2 model-count rule. No course dataset, model or assessment result is bundled.
 
 ## Install from a local clone
 

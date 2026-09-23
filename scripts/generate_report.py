@@ -71,14 +71,22 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     metric = p["metrics"]["primary"]
     add(1, "Evaluation and comparison", f"Primary metric: {metric} ({'lower' if metric == 'log_loss' else 'higher'} is better). "
         f"Nested CV: {p['cv']['strategy']}, {p['cv']['outer_splits']} outer / {p['cv']['inner_splits']} inner folds; seed {p['seed']}. "
-        "All learned preprocessing is fitted within folds. Both classifiers share validation splits. "
+        "All learned preprocessing is fitted within folds. All classifiers share validation splits. "
         + (f"Binary positive class: {p['positive_class']}; threshold: {p['threshold']}. " if p["task"] == "binary" else "Multiclass prediction uses argmax. ")
         + (f"Held-out evaluation: {test['test_rows']} rows, {test['labelled_rows']} labelled, {test['missing_labels']} unlabelled. "
            if test else "No held-out evaluation performed; these are development estimates. ")
         + "Fold SD measures variability, not a confidence interval. Sensitivity selection can introduce development selection optimism.")
+    # The printed metric set is fixed by the pre-test plan order, never selected from
+    # held-out performance. Full scores for every declared metric remain in evidence JSON.
+    displayed_metrics = [metric, *p["metrics"]["secondary"][:2]]
+    omitted_metrics = p["metrics"]["secondary"][2:]
+    if omitted_metrics:
+        add(1, "Additional prespecified metrics", "Full fold and held-out results for "
+            + ", ".join(omitted_metrics) + " are retained in the verified result files; "
+            "the compact PDF table shows the primary and first two secondary metrics in plan order.")
     table = [["Model / metric", "Outer mean (SD)", "Held-out"]]
     for name, model in vr["models"].items():
-        for m in [metric, *p["metrics"]["secondary"]]:
+        for m in displayed_metrics:
             summary = model["outer_summary"][m]
             value = test["models"][name]["metrics"][m] if test else None
             development_score = "N/A" if summary["mean"] is None else f"{summary['mean']:.3f} ({summary['std']:.3f})"

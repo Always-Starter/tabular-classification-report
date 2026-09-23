@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze one reviewed development variant, both pipelines, and their evidence."""
+"""Freeze one reviewed development variant, all pipelines, and their evidence."""
 import argparse
 from pathlib import Path
 from common import code_hashes, environment, read_json, sha, utcnow, write_json

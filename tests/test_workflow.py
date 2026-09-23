@@ -52,9 +52,23 @@ class Contracts(unittest.TestCase):
         p = example(); p["models"][0]["grid"] = {"model__C": [-1]}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__C": list(range(1, 20))}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__random_state": [1]}; cases.append(p)
+        p = example(); p["models"] = p["models"][:1]; cases.append(p)
+        p = example(); p["models"].extend([copy.deepcopy(p["models"][0]), copy.deepcopy(p["models"][1])]); cases.append(p)
+        p = example(); p["models"].append(copy.deepcopy(p["models"][0])); p["models"][2]["name"] = "third"; cases.append(p)
         for p in cases:
             with self.subTest(plan=p), self.assertRaises((ValueError, TypeError)):
                 validate(p)
+
+    def test_three_models_require_a_reason(self):
+        p = example()
+        third = copy.deepcopy(p["models"][1])
+        third["name"] = "forest"
+        third["type"] = "random_forest"
+        third["params"] = {"n_estimators": 10}
+        third["grid"] = {}
+        p["models"].append(third)
+        p["model_count_rationale"] = "Training diagnosis motivates an additional nonlinear ensemble comparison."
+        self.assertEqual(len(validate(p)["models"]), 3)
 
     def test_nonlast_positive_class_metrics(self):
         p = example()
@@ -310,6 +324,45 @@ class Workflow(unittest.TestCase):
             self.assertEqual(result["class_order"], ["alpha", "beta", "gamma"])
             self.assertEqual(len(result["models"]["linear"]["confusion_matrix"]), 3)
             self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
+
+    def test_three_model_full_workflow_and_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            p = example()
+            third = copy.deepcopy(p["models"][1])
+            third.update(name="forest", type="random_forest", params={"n_estimators": 10}, grid={})
+            p["models"].append(third)
+            p["model_count_rationale"] = "Synthetic three-model software check; no course-data recommendation."
+            train = tmp / "train.csv"
+            frame().to_csv(train, index=False)
+            write_json(tmp / "plan.json", p)
+            result = run(train, tmp / "plan.json", tmp / "dev")
+            self.assertEqual(set(result["variants"]["baseline"]["models"]), {"linear", "tree", "forest"})
+            review = tmp / "review.json"
+            write_json(review, {"selected_variant": "baseline", "preferred_model": "linear",
+                                "rationale": "Synthetic test", "sensitivity_review": "None declared",
+                                "warnings_review": "Reviewed synthetic warnings"})
+            lock = tmp / "model-lock.json"
+            freeze(tmp / "dev/training_results.json", tmp / "dev", review, lock)
+            self.approve_fixture(lock)
+            test = self.holdout(tmp)
+            evaluated = evaluate(test, lock, tmp / "dev", tmp / "out")
+            self.assertEqual(set(evaluated["models"]), {"linear", "tree", "forest"})
+            self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
+            diagnosis = {"training_source": {"sha256": sha(train)}, **diagnose(frame(), "label")}
+            write_json(tmp / "diagnosis.json", diagnosis)
+            narrative = read_json(ROOT / "references/narrative-template.json")
+            narrative.update(exploration="Synthetic mixed-feature data.", preprocessing="Fold-local preparation.",
+                             features="All fixture predictors retained.", model_rationale="Three software-test model families.",
+                             findings="Software fixture only.", limitations="No real-world inference.")
+            write_json(tmp / "narrative.json", narrative)
+            manifest = generate(tmp / "dev/training_results.json", tmp / "diagnosis.json", tmp / "narrative.json",
+                                tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
+            self.assertEqual(manifest["main_pages"], 2)
+            report = (tmp / "report/report.md").read_text(encoding="utf-8")
+            for name in ("linear", "tree", "forest"):
+                self.assertIn(f"{name} / f1", report)
+            self.assertIn("Additional prespecified metrics", report)
 
 
 if __name__ == "__main__":

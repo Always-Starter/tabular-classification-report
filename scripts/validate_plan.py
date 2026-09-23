@@ -16,7 +16,7 @@ def validate(plan):
     required = {"schema_version", "target", "task", "features", "numeric_features", "categorical_features",
                 "excluded_features", "seed", "cv", "metrics", "models", "decision_trace", "sensitivities"}
     require(required <= plan.keys(), f"Missing plan fields: {sorted(required - plan.keys())}")
-    allowed = required | {"positive_class", "threshold"}
+    allowed = required | {"positive_class", "threshold", "model_count_rationale"}
     require(set(plan) <= allowed, f"Unknown plan fields: {set(plan) - allowed}")
     require(plan["schema_version"] == 2, "Only plan schema_version 2 is supported")
     require(plan["task"] in {"binary", "multiclass"}, "task must be binary or multiclass")
@@ -57,7 +57,14 @@ def validate(plan):
     for decision in plan["decision_trace"]:
         require(set(decision) == {"observation", "decision", "rationale", "human_review_point"}, "Decision trace requires all four fields")
         require(all(isinstance(v, str) and v.strip() for v in decision.values()), "Decision evidence cannot be empty")
-    require(isinstance(plan["models"], list) and len(plan["models"]) == 2, "Compare exactly two models")
+    require(isinstance(plan["models"], list) and 2 <= len(plan["models"]) <= 3,
+            "Compare two or three models; a third needs a documented reason")
+    if len(plan["models"]) == 3:
+        require(isinstance(plan.get("model_count_rationale"), str) and bool(plan["model_count_rationale"].strip()),
+                "A third model needs a nonempty model_count_rationale grounded in training evidence")
+    elif "model_count_rationale" in plan:
+        require(isinstance(plan["model_count_rationale"], str) and bool(plan["model_count_rationale"].strip()),
+                "model_count_rationale must be nonempty when supplied")
     names = []
     for spec in plan["models"]:
         require(set(spec) == {"name", "type", "params", "grid", "preprocessing"}, "Each model needs name/type/params/grid/preprocessing")

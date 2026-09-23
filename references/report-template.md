@@ -18,7 +18,7 @@ python scripts/generate_report.py \
 
 Without a separate test dataset, omit `--test-results` and `--lock`; optionally select a train-only `--variant`. This generates a development-only report, clearly labelled as such.
 
-Outputs: report.md, report.pdf, report_manifest.json. The PDF main report is two pages, followed by Reflection in the same document. Page-count validation refuses a main report longer than two pages; it does not shrink text to illegibility. Tables are generated from verified saved metrics. A manifest binds report/narrative/result hashes. Missing personal/LLM/repository metadata or unconfirmed Reflection keeps the document marked DRAFT.
+Outputs: report.md, report.pdf, report_manifest.json. The PDF main report is two pages, followed by Reflection in the same document. Page-count validation refuses a main report longer than two pages; it does not shrink text to illegibility. To keep the PDF comparable across two or three models, its table displays the prespecified primary and first two secondary metrics in plan order; every declared metric remains in the verified result files. Tables are generated from verified saved metrics, never chosen after viewing holdout scores. A manifest binds report/narrative/result hashes. Missing personal/LLM/repository metadata or unconfirmed Reflection keeps the document marked DRAFT.
 
 Before delivery, render the PDF and inspect all pages for clipping, oversized tables, readable fonts and correct Reflection placement. Numerical verification cannot validate free-text interpretations: compare narrative claims with the saved evidence. Do not claim this template is an already-completed course report.
 

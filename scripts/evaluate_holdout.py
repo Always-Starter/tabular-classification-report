@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate two already-fitted, approved pipelines in one held-out data read."""
+"""Evaluate all already-fitted, approved pipelines in one held-out data read."""
 import argparse
 import hashlib
 from pathlib import Path
