@@ -1,8 +1,8 @@
 # Tabular Classification Report
 
-A reusable Codex skill for selecting and comparing two or three classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, optional one-time held-out evaluation and automatic Markdown/PDF reporting. Two is the usual choice; a third needs a distinct, documented comparison question. This range is an implementation choice, not an explicit Variant 2 model-count rule. No course dataset, model or assessment result is bundled.
+A reusable Agent Skill for selecting and comparing two or three classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, optional one-time held-out evaluation and automatic Markdown/PDF reporting. It was developed and tested with Codex. Claude Code also supports the `SKILL.md` format, but this package has not been tested there. Two models are the usual choice; a third needs a distinct, documented comparison question. This range is an implementation choice, not an explicit Variant 2 model-count rule. No course dataset, model or assessment result is bundled.
 
-## Install from a local clone
+## Installation
 
 Requires Python 3.10+ (tested with 3.12). After cloning/downloading this repository, copy the whole skill directory, including scripts and references, to `~/.agents/skills/tabular-classification-report`. Do not copy only SKILL.md. If the repository root is the skill directory, the local steps are:
 
@@ -17,7 +17,9 @@ python3 -m venv .venv
 
 Use a fresh destination; do not nest a copy inside an existing skill. A symlink to the local clone is an alternative for development. In Codex, invoke `$tabular-classification-report`; if discovery has not refreshed, start a new task. A portable fallback is: “Read and follow /absolute/path/to/tabular-classification-report/SKILL.md”. Tell the agent to use this skill's `.venv/bin/python`.
 
-## Try it yourself
+Claude Code users can place the whole folder under `~/.claude/skills/tabular-classification-report` and invoke `/tabular-classification-report`, following the [Claude Code skill documentation](https://code.claude.com/docs/en/skills). This is a format-based installation route, not a claim that this package has been tested in Claude Code.
+
+## Usage
 
 User-facing prompts and results default to English. If your current request is clearly in another language, the agent uses that language; you can also state a language preference explicitly. A new English-language request is answered in English even if earlier messages used another language. Dataset field names and label values stay as written in the data.
 
@@ -52,18 +54,18 @@ In either mode, the held-out data stays sealed until you approve the displayed M
 
 The agent proposes data-appropriate candidate families and preprocessing; Python executes the reviewed plan. The primary metric, bounded grid and stopping rule are determined before fitting. Development results flag selected numeric-grid edges as uncertainty without automatically widening the search. Six model families, binary/multiclass targets, configurable metrics and per-model preprocessing are supported. Grouped and forward-time nested CV are available. Unsupported models or data structures are rejected explicitly and require a tested extension. This is not an unlimited AutoML package. See [plan contract](references/model-plan-schema.md).
 
-## Test and reproduce
+## Tests and reproducibility
 
-`python -m unittest discover -s tests -v` uses only synthetic fixtures in temporary folders. It tests successful workflows and refusal paths, including approval, tampered models, repeat evaluation, label ordering, multiclass, CV dependence and generated reports. It never accesses course files. Fixtures are not recommended modelling defaults.
+`python -m unittest discover -s tests -v` uses only synthetic fixtures in temporary folders. It tests successful workflows and refusal paths, including approval, tampered models, repeat evaluation, label ordering, multiclass, CV dependence and generated reports. These fixtures are for software checks only: they are not used when the skill is run on an instructor's own training and test files, and they are not recommended modelling defaults.
 
 For a visible self-test, run `python tests/smoke_demo.py --output-dir /absolute/path/to/new-demo-folder`. It generates its own data, runs train-only development and writes a sample PDF/Markdown report. It cannot accept or read your course dataset. The sample is marked as a draft and is not a course submission.
 
-`requirements.txt` declares supported ranges. `requirements-tested.txt` records the exact direct package versions used for this revision's verification (not a cross-platform transitive lock). Every run also saves exact Python/package versions and code hashes, and evaluation requires the same environment as training. Preserve the virtual environment or record `pip freeze` for a fully reproducible deployment.
+`requirements.txt` declares supported dependency ranges. This package has been tested with Python 3.12; it does not require a particular set of pinned package versions. Every run saves the actual Python/package versions and code hashes, and held-out evaluation requires the same environment as training. Preserve the virtual environment or record `pip freeze` when exact environment reproduction is needed.
 
 Approval and one-time receipts are auditable local workflow controls, not tamper-proof security. A failed attempt after test access remains recorded; do not remove it and rerun. Load only trusted local joblib artifacts.
 
-## GitHub handoff
+## Submission notes
 
-Publish this entire directory, not runtime output folders. `.gitignore` excludes environments, trained models and generated results. Replace the repository metadata in the actual report after publishing; no GitHub URL is invented here. The report is automatically generated as two main pages plus a Reflection draft. The student must provide their details, verify an output themselves, and confirm the Reflection before submission.
+The full skill is published at [Always-Starter/tabular-classification-report](https://github.com/Always-Starter/tabular-classification-report). The repository is currently private, so the instructor needs access to install or inspect it. Do not commit runtime output folders; `.gitignore` excludes environments, trained models and generated results. Supply the repository URL and your own details in the actual report metadata. The report is automatically generated as two main pages plus a Reflection draft. The student must verify an output themselves and confirm the Reflection before submission.
 
 The skill remains generic: do not describe a supplied dataset as customer churn or assign business meanings without source evidence. Four checkpoints, nested CV and a Model Lock are implementation choices; IN6227 grades justified reasoning, reusable implementation, report and Reflection.
