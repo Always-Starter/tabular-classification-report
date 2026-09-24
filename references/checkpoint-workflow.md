@@ -4,9 +4,9 @@ Run commands from the skill root with a Python environment containing `requireme
 
 Use the [review mode selected at startup](../SKILL.md#choose-the-review-mode). Staged review is the default; continuous execution requires an explicit choice. At each staged pause, show concrete results, review points and what approval would start next. A user-requested checkpoint limit applies in either mode.
 
-## 0. Target resolution and input validation
+## Preflight: Target resolution and input validation
 
-Inspect training schema before supervised diagnosis:
+This prerequisite occurs before Checkpoint 1; it is not an additional checkpoint. Inspect training schema before supervised diagnosis:
 
 `python scripts/inspect_training_schema.py --train /data/train.csv --output /runs/run1/schema.json`
 
