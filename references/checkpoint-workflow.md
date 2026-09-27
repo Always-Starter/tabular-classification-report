@@ -10,7 +10,7 @@ This prerequisite occurs before Checkpoint 1; it is not an additional checkpoint
 
 `python scripts/inspect_training_schema.py --train /data/train.csv --output /runs/run1/schema.json`
 
-If the user or authoritative assignment/task/dataset metadata explicitly supplies `label`, add `--target label` to validate it. Otherwise show the columns, ask for the target and stop. An absent specified column also stops the workflow; do not silently substitute another. Record the source of the target choice. Column order, label-like names, apparent class count, filenames, associations and prior examples are not task semantics. Do not inspect any held-out file to resolve the target.
+If the user or authoritative assignment/task/dataset metadata explicitly supplies `label`, add `--target label` to validate it. An absent specified column stops the workflow; do not silently substitute another. Without a supplied target, inspect the training-only `target_candidates` and `target_resolution`. A unique conventional target name with 2–20 nonmissing classes and adequate examples may yield `provisionally_inferred`: explain why it is merely a possible label, record its source and alternatives, and proceed using that name only when task context does not contradict it. Mark target confirmation pending in the report. If `unresolved`, show candidates and ask for the target before supervised diagnosis. Neither name nor class count alone proves task semantics; never choose solely by column order, filename, association or prior examples. Do not inspect any held-out file to resolve the target.
 
 ## 1. Training diagnosis
 
