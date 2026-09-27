@@ -43,12 +43,20 @@ def verify(path, lock_path):
     path, lock_path = Path(path), Path(lock_path)
     r, lock = read_json(path), read_json(lock_path)
     receipt = read_json(lock_path.with_name(lock_path.name + ".holdout.json"))
-    approval = read_json(lock_path.with_name(lock_path.name + ".approval.json"))
+    seal = read_json(lock_path.with_name(lock_path.name + ".seal.json"))
+    approval_path = lock_path.with_name(lock_path.name + ".approval.json")
+    approval = read_json(approval_path) if approval_path.exists() else None
     if (r["lock_sha256"] != sha(lock_path) or receipt["lock_sha256"] != sha(lock_path)
-            or approval != r["approval"] or approval["lock_sha256"] != sha(lock_path)
-            or approval["status"] != "approved" or receipt["status"] != "completed"
+            or lock.get("status") != "frozen" or type(lock.get("human_approval_required")) is not bool
+            or seal.get("lock_sha256") != sha(lock_path)
+            or seal.get("human_approval_required") != lock["human_approval_required"]
+            or approval != r["approval"]
+            or (lock["human_approval_required"] and approval is None)
+            or (approval is not None and (approval.get("lock_sha256") != sha(lock_path)
+                                          or approval.get("status") != "approved"))
+            or receipt["status"] != "completed"
             or receipt["results_sha256"] != sha(path) or receipt["test_sha256"] != r["test_sha256"]):
-        raise ValueError("Lock, approval, receipt or result integrity mismatch")
+        raise ValueError("Lock, seal, approval, receipt or result integrity mismatch")
     if r["plan"] != lock["plan"] or r["class_order"] != lock["class_order"] or set(r["models"]) != set(lock["models"]):
         raise ValueError("Results differ from frozen plan")
     examples = {}

@@ -2,7 +2,7 @@
 
 Run commands from the skill root with a Python environment containing `requirements.txt`. Paths below are examples to replace. Preserve each run directory; do not write into the skill or overwrite source data.
 
-Use the [review mode selected at startup](../SKILL.md#choose-the-review-mode). Staged review is the default; continuous execution requires an explicit choice. At each staged pause, show concrete results, review points and what approval would start next. A user-requested checkpoint limit applies in either mode.
+Follow [execution and review](../SKILL.md#execution-and-review). End-to-end execution is the default; staged review, a checkpoint limit or a pre-test approval pause applies only when explicitly requested. At each requested pause, show concrete results, review points and what approval would start next. Obtain host/tool permission before reading a file when required; that permission is separate from a Model Lock review pause.
 
 ## Preflight: Target resolution and input validation
 
@@ -16,7 +16,7 @@ If the user or authoritative assignment/task/dataset metadata explicitly supplie
 
 `python scripts/diagnose_training.py --train /data/train.csv --target label --output /runs/run1/diagnosis.json`
 
-Excel adds `--sheet Data` to schema inspection and diagnosis. The diagnosis CLI requires the resolved target and does not infer it. Diagnose training only. Ask about dependent observations or unresolved high-risk feature provenance. In staged review, show observations, uncertainties, candidate leakage/provenance issues, and a reasonable challenge point; stop before drafting a plan. Approval starts Checkpoint 2. In continuous execution, explain the findings and proceed if no blocking uncertainty remains.
+Excel adds `--sheet Data` to schema inspection and diagnosis. The diagnosis CLI requires the resolved target and does not infer it. Diagnose training only. Ask about dependent observations or unresolved high-risk feature provenance when these could invalidate the experiment. In explicitly requested staged review, show observations, uncertainties, candidate leakage/provenance issues, and a reasonable challenge point; stop before drafting a plan. Approval starts Checkpoint 2. Otherwise, document the findings and proceed if no blocking uncertainty remains.
 
 ## 2. Modelling plan
 
@@ -24,7 +24,7 @@ Use `tests/fixtures/example-plan.json` as a schema example, not as a default exp
 
 `python scripts/validate_plan.py /runs/run1/plan.json`
 
-Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. The plan proposes candidates, not a proven winner. Validation does not fit models. In staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. In continuous execution, explain the plan and proceed within its declared limits.
+Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. The plan proposes candidates, not a proven winner. Validation does not fit models. In explicitly requested staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. Otherwise, document the plan and proceed within its declared limits.
 
 ## 3. Development and optional Model Lock
 
@@ -44,13 +44,15 @@ The development directory must be empty. All candidate and sensitivity preproces
 
 `python scripts/freeze_model_lock.py --results /runs/run1/development/training_results.json --model-dir /runs/run1/development --review /runs/run1/review.json --output /runs/run1/model-lock.json`
 
-Show training results, all frozen configurations, remaining uncertainties, challengeable alternatives and the printed digest. In both modes, stop before accessing the test file until this exact lock is approved; approval starts Checkpoint 4. Selecting continuous execution is not approval of a lock that has not yet been displayed. With training data only, skip the lock and held-out approval; staged review still pauses after development before reporting.
+The command writes the lock and a digest seal. In the default end-to-end run, save training results, all frozen configurations, remaining uncertainties, alternatives and the digest, then proceed to the supplied held-out file without a routine approval pause. If the user requested staged review or pre-test approval, add `--require-human-approval` when freezing, show the exact digest and stop; approval starts Checkpoint 4. With training data only, skip the lock; requested staged review still pauses after development before reporting.
 
-## 4. Approval, one-time evaluation and report
+## 4. One-time evaluation and report (approval only when requested)
 
-After the user explicitly approves the displayed lock:
+Only when the user explicitly requested a pre-test approval pause, after they approve the displayed lock:
 
 `python scripts/approve_model_lock.py --lock /runs/run1/model-lock.json --expected-sha256 DIGEST_FROM_FREEZE --approver 'actual reviewer' --statement 'actual approval statement'`
+
+In a default end-to-end run, skip the approval command. In either case, evaluate the frozen pipelines once:
 
 `python scripts/evaluate_holdout.py --test /data/test.csv --lock /runs/run1/model-lock.json --model-dir /runs/run1/development --output-dir /runs/run1/holdout`
 
@@ -58,4 +60,4 @@ After the user explicitly approves the displayed lock:
 
 Proceed to the report reference. Do not re-read test data to verify metrics: saved predictions contain the necessary evidence. If the test file has no target column, predictions are still saved but supervised metrics are undefined. If evaluation fails after access is reserved, preserve the receipt and disclose the failure; no automatic retry, relocking or retuning.
 
-Without a separate test file, omit held-out lock approval/evaluation. In staged review, still pause after Checkpoint 3 to review the training results; approval starts development-only reporting. In continuous execution, proceed directly to that report. Never describe nested-CV values as held-out test performance.
+Without a separate test file, omit held-out lock approval/evaluation. In requested staged review, pause after Checkpoint 3 to review the training results; approval starts development-only reporting. Otherwise, proceed directly to that report. Never describe nested-CV values as held-out test performance.

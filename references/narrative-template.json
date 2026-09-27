@@ -13,7 +13,7 @@
   "findings": "Interpret verified validation/test results without changing model decisions. Distinguish numerical ranking from meaningful superiority; discuss fold variability and generalization.",
   "limitations": "State unknown domain meaning/error costs, remaining provenance concerns and validation limitations.",
   "reflection": {
-    "human_oversight": "Pending: student should describe checkpoints actually reviewed and decisions actually made.",
+    "human_oversight": "Pending: student should describe decisions they actually reviewed, during or after the run, without inventing approval pauses.",
     "challenged_decision": "Pending: identify a real decision challenged and explain agreement/disagreement.",
     "manual_verification": "Pending: student should independently recompute a particular saved output; automated verification is not a manual check.",
     "future_changes": "Pending: student should describe what they would change in a future independent experiment."

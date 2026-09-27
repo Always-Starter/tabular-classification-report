@@ -9,8 +9,12 @@ def approve(lock_path, expected_sha256, approver, statement):
     path = Path(lock_path)
     if sha(path) != expected_sha256:
         raise ValueError("Lock digest differs from the reviewed digest")
-    if read_json(path)["status"] != "pending_human_approval":
-        raise ValueError("Unexpected lock status")
+    lock = read_json(path)
+    if lock.get("status") != "frozen" or lock.get("human_approval_required") is not True:
+        raise ValueError("This frozen lock does not require human approval")
+    seal = read_json(path.with_name(path.name + ".seal.json"))
+    if seal.get("lock_sha256") != expected_sha256 or seal.get("human_approval_required") is not True:
+        raise ValueError("Lock seal differs from the reviewed digest")
     if not approver.strip() or not statement.strip():
         raise ValueError("Record who approved and their explicit approval statement")
     record = {"status": "approved", "lock_sha256": expected_sha256, "approved_at": utcnow(),

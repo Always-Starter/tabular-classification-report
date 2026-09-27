@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Freeze one reviewed development variant, all pipelines, and their evidence."""
+"""Freeze one selected development variant, all pipelines, and their evidence."""
 import argparse
 from pathlib import Path
 from common import code_hashes, environment, read_json, sha, utcnow, write_json
 from verify_results import verify_training
 
 
-def freeze(results, model_dir, review_path, output):
+def freeze(results, model_dir, review_path, output, require_human_approval=False):
     results, model_dir, output = Path(results), Path(model_dir), Path(output)
     r, review = read_json(results), read_json(review_path)
     verify_training(results)
@@ -24,15 +24,20 @@ def freeze(results, model_dir, review_path, output):
         if sha(model_dir / artifact["path"]) != artifact["sha256"]:
             raise ValueError(f"Model changed since development: {name}")
         artifacts[name] = artifact
-    lock = {"schema_version": 2, "status": "pending_human_approval", "created_at": utcnow(),
+    lock = {"schema_version": 2, "status": "frozen", "created_at": utcnow(),
+            "human_approval_required": require_human_approval,
             "plan": selected["plan"], "class_order": r["class_order"], "review": review,
             "training_source": r["training_source"], "eligible_training_rows": r["eligible_rows"],
             "models": selected["models"], "artifacts": artifacts,
             "environment": r["environment"], "code_sha256": r["code_sha256"],
             "training_results_sha256": sha(results),
-            "policy": "Approve exact lock digest before one holdout read; never retune after that read."}
+            "policy": "Evaluate the frozen plan at most once; never retune after held-out access."}
     write_json(output, lock, exclusive=True)
-    print(f"Lock SHA-256 for review: {sha(output)}")
+    lock_hash = sha(output)
+    write_json(output.with_name(output.name + ".seal.json"),
+               {"lock_sha256": lock_hash, "human_approval_required": require_human_approval,
+                "sealed_at": utcnow()}, exclusive=True)
+    print(f"Frozen Model Lock SHA-256: {lock_hash}")
     return lock
 
 
@@ -42,5 +47,7 @@ if __name__ == "__main__":
     p.add_argument("--model-dir", type=Path, required=True)
     p.add_argument("--review", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--require-human-approval", action="store_true",
+                   help="Require an explicit approval of this lock before held-out evaluation")
     a = p.parse_args()
-    freeze(a.results, a.model_dir, a.review, a.output)
+    freeze(a.results, a.model_dir, a.review, a.output, a.require_human_approval)

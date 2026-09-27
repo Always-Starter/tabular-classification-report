@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate all already-fitted, approved pipelines in one held-out data read."""
+"""Evaluate all frozen pipelines in one held-out data read."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -15,11 +15,16 @@ def evaluate(test, lock_path, model_dir, output_dir, sheet="Data"):
     lock = read_json(lock_path)
     plan = validate(lock["plan"])
     lock_hash = sha(lock_path)
+    if lock.get("status") != "frozen" or type(lock.get("human_approval_required")) is not bool:
+        raise ValueError("Expected a frozen Model Lock with an explicit approval policy")
+    seal = read_json(lock_path.with_name(lock_path.name + ".seal.json"))
+    if seal.get("lock_sha256") != lock_hash or seal.get("human_approval_required") != lock["human_approval_required"]:
+        raise ValueError("Model Lock seal/digest mismatch")
     approval_path = lock_path.with_name(lock_path.name + ".approval.json")
-    if not approval_path.exists():
+    if lock["human_approval_required"] and not approval_path.exists():
         raise ValueError("Human approval is required before opening the test file")
-    approval = read_json(approval_path)
-    if approval.get("status") != "approved" or approval.get("lock_sha256") != lock_hash:
+    approval = read_json(approval_path) if approval_path.exists() else None
+    if approval is not None and (approval.get("status") != "approved" or approval.get("lock_sha256") != lock_hash):
         raise ValueError("Approval does not match this exact Model Lock")
     if code_hashes() != lock["code_sha256"] or environment() != lock["environment"]:
         raise ValueError("Code/environment changed since locking; test remains sealed")

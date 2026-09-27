@@ -167,9 +167,10 @@ class Workflow(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def new_lock(self, directory):
+    def new_lock(self, directory, approval_required=False):
         path = Path(directory) / "model-lock.json"
-        freeze(self.development / "training_results.json", self.development, self.review, path)
+        freeze(self.development / "training_results.json", self.development, self.review, path,
+               require_human_approval=approval_required)
         return path
 
     def approve_fixture(self, lock):
@@ -233,25 +234,58 @@ class Workflow(unittest.TestCase):
 
     def test_unapproved_refuses_before_test_read(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lock = self.new_lock(tmp)
+            lock = self.new_lock(tmp, approval_required=True)
             with patch("evaluate_holdout.load_table", side_effect=AssertionError("Must not read")), self.assertRaisesRegex(ValueError, "approval"):
+                evaluate(Path(tmp) / "does-not-exist.csv", lock, self.development, Path(tmp) / "out")
+            self.assertFalse(lock.with_name(lock.name + ".holdout.json").exists())
+
+    def test_staged_lock_evaluates_after_explicit_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            lock = self.new_lock(tmp, approval_required=True)
+            self.approve_fixture(lock)
+            result = evaluate(self.holdout(tmp), lock, self.development, tmp / "out")
+            self.assertEqual(result["approval"]["lock_sha256"], sha(lock))
+            self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
+
+    def test_missing_lock_seal_refuses_before_test_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = self.new_lock(tmp)
+            lock.with_name(lock.name + ".seal.json").unlink()
+            with patch("evaluate_holdout.load_table", side_effect=AssertionError("Must not read")), self.assertRaises(FileNotFoundError):
                 evaluate(Path(tmp) / "does-not-exist.csv", lock, self.development, Path(tmp) / "out")
             self.assertFalse(lock.with_name(lock.name + ".holdout.json").exists())
 
     def test_bad_digest_and_tampered_lock_refuse(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lock = self.new_lock(tmp)
+            lock = self.new_lock(tmp, approval_required=True)
             with self.assertRaisesRegex(ValueError, "digest"):
                 approve(lock, "0" * 64, "reviewer", "approved")
             self.approve_fixture(lock)
             payload = read_json(lock); payload["plan"]["threshold"] = .9; write_json(lock, payload)
-            with self.assertRaisesRegex(ValueError, "Approval"):
+            with self.assertRaisesRegex(ValueError, "seal/digest"):
+                evaluate(Path(tmp) / "absent.csv", lock, self.development, Path(tmp) / "out")
+
+    def test_automatic_lock_evaluates_without_approval_and_rejects_tampering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            lock = self.new_lock(tmp)
+            self.assertFalse(lock.with_name(lock.name + ".approval.json").exists())
+            with self.assertRaisesRegex(ValueError, "does not require human approval"):
+                approve(lock, sha(lock), "synthetic reviewer", "approved")
+            result = evaluate(self.holdout(tmp), lock, self.development, tmp / "out")
+            self.assertIsNone(result["approval"])
+            self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = self.new_lock(tmp)
+            payload = read_json(lock); payload["plan"]["threshold"] = .9; write_json(lock, payload)
+            with patch("evaluate_holdout.load_table", side_effect=AssertionError("Must not read")), self.assertRaisesRegex(ValueError, "seal/digest"):
                 evaluate(Path(tmp) / "absent.csv", lock, self.development, Path(tmp) / "out")
 
     def test_tampered_model_refuses_before_test_read(self):
         import shutil
         with tempfile.TemporaryDirectory() as tmp:
-            lock = self.new_lock(tmp); self.approve_fixture(lock)
+            lock = self.new_lock(tmp)
             copied = Path(tmp) / "models"; shutil.copytree(self.development, copied)
             with (copied / "baseline/linear.joblib").open("ab") as stream:
                 stream.write(b"tampering")
@@ -260,13 +294,13 @@ class Workflow(unittest.TestCase):
 
     def test_changed_code_refuses_before_test_read(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lock = self.new_lock(tmp); self.approve_fixture(lock)
+            lock = self.new_lock(tmp)
             with patch("evaluate_holdout.code_hashes", return_value={}), self.assertRaisesRegex(ValueError, "Code/environment"):
                 evaluate(Path(tmp) / "absent.csv", lock, self.development, Path(tmp) / "out")
 
     def test_corrupt_predictions_are_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp); lock = self.new_lock(tmp); self.approve_fixture(lock)
+            tmp = Path(tmp); lock = self.new_lock(tmp)
             evaluate(self.holdout(tmp), lock, self.development, tmp / "out")
             path = tmp / "out/linear_predictions.json"
             content = read_json(path); content["records"][0]["prediction"] = "tampered"; write_json(path, content)
@@ -275,7 +309,7 @@ class Workflow(unittest.TestCase):
 
     def test_holdout_verify_repeat_and_report(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp); lock = self.new_lock(tmp); self.approve_fixture(lock)
+            tmp = Path(tmp); lock = self.new_lock(tmp)
             test = self.holdout(tmp)
             result = evaluate(test, lock, self.development, tmp / "out")
             self.assertEqual(result["missing_labels"], 1)
@@ -305,7 +339,7 @@ class Workflow(unittest.TestCase):
     def test_unlabelled_and_single_class_holdout(self):
         for mode in ("unlabelled", "one-class"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp); lock = self.new_lock(tmp); self.approve_fixture(lock)
+                tmp = Path(tmp); lock = self.new_lock(tmp)
                 test = self.holdout(tmp, labelled=mode != "unlabelled")
                 if mode == "one-class":
                     d = load_table(test); d["label"] = "no"; d.to_csv(test, sep="\t", index=False)
@@ -315,7 +349,7 @@ class Workflow(unittest.TestCase):
 
     def test_missing_feature_consumes_attempt(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp); lock = self.new_lock(tmp); self.approve_fixture(lock)
+            tmp = Path(tmp); lock = self.new_lock(tmp)
             test = tmp / "heldout.csv"; frame(30).drop(columns="x1").to_csv(test, index=False)
             with self.assertRaisesRegex(ValueError, "Missing required"):
                 evaluate(test, lock, self.development, tmp / "out")
@@ -333,7 +367,6 @@ class Workflow(unittest.TestCase):
             run(train, tmp / "plan.json", tmp / "dev")
             lock = tmp / "model-lock.json"
             freeze(tmp / "dev/training_results.json", tmp / "dev", self.review, lock)
-            self.approve_fixture(lock)
             test = tmp / "test.csv"; frame(30, True).to_csv(test, index=False)
             result = evaluate(test, lock, tmp / "dev", tmp / "out")
             self.assertEqual(result["class_order"], ["alpha", "beta", "gamma"])
@@ -359,7 +392,6 @@ class Workflow(unittest.TestCase):
                                 "warnings_review": "Reviewed synthetic warnings"})
             lock = tmp / "model-lock.json"
             freeze(tmp / "dev/training_results.json", tmp / "dev", review, lock)
-            self.approve_fixture(lock)
             test = self.holdout(tmp)
             evaluated = evaluate(test, lock, tmp / "dev", tmp / "out")
             self.assertEqual(set(evaluated["models"]), {"linear", "tree", "forest"})

@@ -23,46 +23,41 @@ Claude Code users can place the whole folder under `~/.claude/skills/tabular-cla
 
 User-facing prompts and results default to English. If your current request is clearly in another language, the agent uses that language; you can also state a language preference explicitly. A new English-language request is answered in English even if earlier messages used another language. Dataset field names and label values stay as written in the data.
 
-You do not need to know checkpoint names. Unless you have already chosen a mode for this run, the agent must **show the following choice before it reads the dataset**. Simply telling you which mode it assumed does not fulfill this step:
+You do not need to know checkpoint names or choose a mode. By default, a request with the necessary training details runs end to end: diagnosis, modelling plan, nested-CV training, optional one-time held-out evaluation and draft report. The agent documents its choices without routine approval pauses. If you explicitly request staged review, it stops after the diagnosis, plan and training results; with a held-out file, it also waits for your approval of the exact Model Lock before testing.
 
-| Mode | When the agent pauses | Suitable for |
-| --- | --- | --- |
-| Staged review (default) | After the data diagnosis, after the modelling plan, and after training results and Model Lock | First use, learning and reviewing decisions |
-| Continuous execution | Before held-out evaluation, after presenting the Model Lock; also when a blocking issue needs your input | Users who want the agent to make intermediate decisions |
-
-The question is: “Choose staged review (default) or continuous execution?” If the interface lets you answer while the agent works and you have not answered yet, it proceeds at most through the diagnosis under staged review, stopping sooner if the target is unresolved. Otherwise, it waits for your choice before reading the data. At each pause it shows results, explains what needs your review and states the next action. You can request a pause or switch modes during the run. A general request to “run everything” does not select continuous execution.
+The agent still stops when an unresolved target, inaccessible file or material data-validity problem requires your input. Providing a file path does not override system permissions; if the host asks for read access, that permission must be granted before the agent continues. Missing report identity metadata can remain marked pending in a draft rather than blocking the analysis.
 
 Before supervised diagnosis, the agent inspects the training schema and validates a target explicitly supplied by you or authoritative task/dataset metadata. If none is available, it asks; it never guesses from the last column, a label-like name or statistical patterns. `python scripts/inspect_training_schema.py --train /absolute/path/train.csv` performs this schema-only check (add `--target name` to validate a supplied column). The diagnosis command separately requires `--target`.
 
-For staged review:
+For the default end-to-end run:
 
 ```text
-Use $tabular-classification-report in staged review mode on /absolute/path/train.csv,
+Use $tabular-classification-report on /absolute/path/train.csv,
 target label. The held-out file is /absolute/path/test.csv.
 Save outputs under /absolute/path/run1.
 ```
 
-For continuous execution:
+To review decisions one checkpoint at a time:
 
 ```text
-Use $tabular-classification-report in continuous execution mode on
+Use $tabular-classification-report in staged review mode on
 /absolute/path/train.csv, target label. The held-out file is /absolute/path/test.csv.
-Save outputs under /absolute/path/run2. Show the Model Lock for my approval before testing.
+Save outputs under /absolute/path/run2. Wait for my review after each checkpoint.
 ```
 
-In either mode, the held-out data stays sealed until you approve the displayed Model Lock. Continuous execution therefore does not mean unattended test evaluation. You can also request a specific limit, such as “Checkpoint 1 only”; the agent honours it in either mode. With no test file, staged review still pauses after training results before reporting, while continuous execution proceeds to a development-only report. See [checkpoint commands](references/checkpoint-workflow.md).
+In either mode, the held-out data stays sealed through training development, and no model decision changes after held-out results. You can request a specific limit, such as “Checkpoint 1 only”. With no test file, the skill produces a development-only report; staged review still pauses after training results before reporting. See [checkpoint commands](references/checkpoint-workflow.md).
 
-The agent proposes data-appropriate candidate families and preprocessing; Python executes the reviewed plan. The primary metric, bounded grid and stopping rule are determined before fitting. Development results flag selected numeric-grid edges as uncertainty without automatically widening the search. Six model families, binary/multiclass targets, configurable metrics and per-model preprocessing are supported. Grouped and forward-time nested CV are available. Unsupported models or data structures are rejected explicitly and require a tested extension. This is not an unlimited AutoML package. See [plan contract](references/model-plan-schema.md).
+The agent proposes data-appropriate candidate families and preprocessing; Python executes the validated plan. The primary metric, bounded grid and stopping rule are determined before fitting. Development results flag selected numeric-grid edges as uncertainty without automatically widening the search. Six model families, binary/multiclass targets, configurable metrics and per-model preprocessing are supported. Grouped and forward-time nested CV are available. Unsupported models or data structures are rejected explicitly and require a tested extension. This is not an unlimited AutoML package. See [plan contract](references/model-plan-schema.md).
 
 ## Tests and reproducibility
 
-`python -m unittest discover -s tests -v` uses only synthetic fixtures in temporary folders. It tests successful workflows and refusal paths, including approval, tampered models, repeat evaluation, label ordering, multiclass, CV dependence and generated reports. These fixtures are for software checks only: they are not used when the skill is run on an instructor's own training and test files, and they are not recommended modelling defaults.
+`python -m unittest discover -s tests -v` uses only synthetic fixtures in temporary folders. It tests both end-to-end and requested staged workflows, including lock integrity, approval when required, tampered models, repeat evaluation, label ordering, multiclass, CV dependence and generated reports. These fixtures are for software checks only: they are not used when the skill is run on an instructor's own training and test files, and they are not recommended modelling defaults.
 
 For a visible self-test, run `python tests/smoke_demo.py --output-dir /absolute/path/to/new-demo-folder`. It generates its own data, runs train-only development and writes a sample PDF/Markdown report. It cannot accept or read your course dataset. The sample is marked as a draft and is not a course submission.
 
 `requirements.txt` declares supported dependency ranges. This package has been tested with Python 3.12; it does not require a particular set of pinned package versions. Every run saves the actual Python/package versions and code hashes, and held-out evaluation requires the same environment as training. Preserve the virtual environment or record `pip freeze` when exact environment reproduction is needed.
 
-Approval and one-time receipts are auditable local workflow controls, not tamper-proof security. A failed attempt after test access remains recorded; do not remove it and rerun. Load only trusted local joblib artifacts.
+Lock seals, optional approval records and one-time receipts are auditable local workflow controls, not tamper-proof security. A failed attempt after test access remains recorded; do not remove it and rerun. Load only trusted local joblib artifacts.
 
 ## Submission notes
 
