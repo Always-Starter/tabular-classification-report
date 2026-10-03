@@ -328,10 +328,33 @@ class Workflow(unittest.TestCase):
             manifest = generate(self.development / "training_results.json", tmp / "diagnosis.json", tmp / "narrative.json", tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
             self.assertEqual(manifest["main_pages"], 2)
             self.assertTrue(manifest["draft"])
+            self.assertFalse(manifest["renderer_changed_since_lock"])
             self.assertGreaterEqual(manifest["total_pages"], 3)
             report = (tmp / "report/report.md").read_text(encoding="utf-8")
-            self.assertIn("Tuning stopped after the prespecified inner-CV search", report)
+            self.assertIn("outer folds did not trigger grid expansion", report)
             self.assertNotIn("SHA-256 evidence accompany this report", report)
+            self.assertIn("Prediction errors (confusion matrix)", report)
+            self.assertIn("Positive class: no. TN = true negatives", report)
+            self.assertIn("| Logistic regression | F1 (no) |", report)
+            self.assertIn("|  | precision (no) |", report)
+            self.assertNotIn("Automated verification aid", report)
+            self.assertNotIn('"numeric_imputer"', report)
+            locked_hashes = read_json(lock)["code_sha256"]
+            renderer_changed = {**locked_hashes, "generate_report.py": "0" * 64}
+            with patch("generate_report.code_hashes", return_value=renderer_changed):
+                with self.assertRaisesRegex(ValueError, "presentation-only-rerender"):
+                    generate(self.development / "training_results.json", tmp / "diagnosis.json", tmp / "narrative.json",
+                             tmp / "blocked", test_results=tmp / "out/test_results.json", lock=lock)
+                derived = generate(self.development / "training_results.json", tmp / "diagnosis.json", tmp / "narrative.json",
+                                   tmp / "presentation-only", test_results=tmp / "out/test_results.json", lock=lock,
+                                   presentation_only_rerender=True)
+                self.assertTrue(derived["renderer_changed_since_lock"])
+            model_code_changed = {**locked_hashes, "common.py": "0" * 64}
+            with patch("generate_report.code_hashes", return_value=model_code_changed):
+                with self.assertRaisesRegex(ValueError, "Non-renderer code changed"):
+                    generate(self.development / "training_results.json", tmp / "diagnosis.json", tmp / "narrative.json",
+                             tmp / "blocked-model-code", test_results=tmp / "out/test_results.json", lock=lock,
+                             presentation_only_rerender=True)
             # Verification uses stored predictions, even when the test file is no longer available.
             test.rename(tmp / "sealed-away.tsv")
             self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
@@ -372,6 +395,18 @@ class Workflow(unittest.TestCase):
             self.assertEqual(result["class_order"], ["alpha", "beta", "gamma"])
             self.assertEqual(len(result["models"]["linear"]["confusion_matrix"]), 3)
             self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
+            diagnosis = {"training_source": {"sha256": sha(train)}, **diagnose(frame(120, True), "label")}
+            write_json(tmp / "diagnosis.json", diagnosis)
+            narrative = read_json(ROOT / "references/narrative-template.json")
+            narrative.update(exploration="Synthetic multiclass data.", preprocessing="Fold-local preparation.",
+                             features="All fixture predictors retained.", model_rationale="Two software-test model families.",
+                             findings="Software fixture only.", limitations="No real-world inference.")
+            write_json(tmp / "narrative.json", narrative)
+            manifest = generate(tmp / "dev/training_results.json", tmp / "diagnosis.json", tmp / "narrative.json",
+                                tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
+            self.assertEqual(manifest["main_pages"], 2)
+            report = (tmp / "report/report.md").read_text(encoding="utf-8")
+            self.assertIn("Actual to predicted counts: alpha", report)
 
     def test_three_model_full_workflow_and_report(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,9 +442,10 @@ class Workflow(unittest.TestCase):
                                 tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
             self.assertEqual(manifest["main_pages"], 2)
             report = (tmp / "report/report.md").read_text(encoding="utf-8")
-            for name in ("linear", "tree", "forest"):
-                self.assertIn(f"{name} / f1", report)
+            for name in ("Logistic regression", "Decision tree", "Random forest"):
+                self.assertIn(f"| {name} | F1 (no) |", report)
             self.assertIn("Additional prespecified metrics", report)
+            self.assertIn("|  | precision (no) |", report)
 
 
 if __name__ == "__main__":
