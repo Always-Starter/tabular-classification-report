@@ -135,7 +135,9 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         held_display = "N/A" if held_score is None else f"{held_score:.4f}"
         summary = (f"Frozen pre-test choice: {model_labels[preferred]}. "
                    f"Nested-CV {metric.replace('_', ' ')}: {cv_display}; "
-                   f"held-out: {held_display}. The model choice was not revised after held-out evaluation.")
+                   f"held-out: {held_display}. The model choice was not revised after held-out evaluation."
+                   + (" This is a presentation-only derivative from verified saved evidence; no model was refitted."
+                      if presentation_only_rerender else ""))
     else:
         summary = (f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}. "
                    "No independent held-out result is claimed.")
@@ -170,7 +172,8 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         + (f"Binary positive class: {p['positive_class']}; threshold: {p['threshold']}. " if p["task"] == "binary" else "Multiclass prediction uses argmax. ")
         + (f"Held-out evaluation: {test['test_rows']:,} rows, {test['labelled_rows']:,} labelled, {test['missing_labels']} unlabelled. "
            if test else "No held-out evaluation performed; these are development estimates. ")
-        + "Fold SD measures variability, not a confidence interval. Sensitivity selection can introduce development selection optimism.")
+        + "Fold SD measures variability, not a confidence interval. Repeatedly comparing development variants and "
+        + "retaining the best-performing one can introduce selection optimism, even when the held-out set remains untouched.")
     # The printed metric set is fixed by the pre-test plan order, never selected from
     # held-out performance. Full scores for every declared metric remain in evidence JSON.
     displayed_metrics = [metric, *p["metrics"]["secondary"][:3]]
@@ -224,8 +227,14 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     add(1, "Findings and discussion", n["findings"])
     add(1, "Limitations", n["limitations"] + f" Selected development variant: {variant}.")
     add(2, "Reflection - outside the two-page report limit", "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection")
+    reflection_titles = {
+        "human_oversight": "Human in the Loop",
+        "challenged_decision": "Critical Evaluation",
+        "manual_verification": "Trustworthiness",
+        "future_changes": "Future Changes",
+    }
     for k in reflection_keys:
-        add(2, k.replace("_", " ").title(), n["reflection"][k])
+        add(2, reflection_titles[k], n["reflection"][k])
     # Arithmetic aids stay in the manifest; the student's Reflection must describe
     # a check they actually performed, not a machine-generated verification claim.
 
@@ -258,6 +267,10 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                              textColor=colors.HexColor("#526574"), spaceAfter=3)
     model_heading = ParagraphStyle("model-heading", parent=heading, fontSize=10.5, leading=14,
                                    spaceBefore=6, spaceAfter=2)
+    reflection_body = ParagraphStyle("reflection-body", parent=style, fontSize=9.6, leading=13.2,
+                                     spaceAfter=5)
+    reflection_heading = ParagraphStyle("reflection-heading", parent=heading, fontSize=11.2, leading=14,
+                                        spaceBefore=8, spaceAfter=3)
     compact = ParagraphStyle("compact", parent=style, fontSize=9.4, leading=12.5, spaceAfter=0)
     table_header = ParagraphStyle("table-header", parent=compact, fontName=bold_name,
                                   textColor=blue)
@@ -312,8 +325,11 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                             ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
                 story.append(callout)
             else:
-                title_style_for_block = title_style if i == 0 else model_heading if title.startswith("Model:") else heading
-                story.extend([para(title, title_style_for_block), para(text)])
+                if page == 2 and i > 0:
+                    story.extend([para(title, reflection_heading), para(text, reflection_body)])
+                else:
+                    title_style_for_block = title_style if i == 0 else model_heading if title.startswith("Model:") else heading
+                    story.extend([para(title, title_style_for_block), para(text)])
             markdown.extend([f"## {title}", "", text, ""])
             if page == 1 and i == 0:
                 story.extend([grid(table, [128, 135, 138, 99], primary_rows), Spacer(1, 5)])
@@ -340,6 +356,8 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                 "model_lock_sha256": sha(lock) if lock else None,
                 "renderer_sha256": renderer_hash,
                 "renderer_changed_since_lock": renderer_changed,
+                "changed_scripts_since_lock": sorted(changed_scripts) if test_results else [],
+                "presentation_only_rerender": bool(presentation_only_rerender),
                 "report_pdf_sha256": sha(pdf), "report_md_sha256": sha(output_dir / "report.md"),
                 "verification": verification, "visual_inspection_required": True}
     write_json(output_dir / "report_manifest.json", manifest, exclusive=True)

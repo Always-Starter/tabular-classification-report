@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Audit saved training-only development evidence without reading held-out data."""
+import argparse
+from pathlib import Path
+
+from common import read_json, sha, write_json
+from verify_results import verify_training
+
+
+def audit(results_path, lock_path=None):
+    results_path = Path(results_path)
+    results = read_json(results_path)
+    verification = verify_training(results_path)
+    lock = read_json(lock_path) if lock_path else None
+    if lock:
+        if lock.get("training_results_sha256") != sha(results_path):
+            raise ValueError("Model Lock refers to different training results")
+        variant_name = lock["review"]["selected_variant"]
+        preferred_model = lock["review"]["preferred_model"]
+        selection_review = lock["review"]
+    else:
+        variant_name, preferred_model, selection_review = "baseline", None, None
+    variant = results["variants"][variant_name]
+    plan = variant["plan"]
+    models = {}
+    for name, model in variant["models"].items():
+        models[name] = {
+            "type": model["type"],
+            "predefined_grid": next(spec["grid"] for spec in plan["models"] if spec["name"] == name),
+            "fixed_params": next(spec["params"] for spec in plan["models"] if spec["name"] == name),
+            "outer_folds": [{"fold": fold["fold"], "selected_params": fold["best_params"],
+                             "inner_search": fold.get("inner_search"), "outer_metrics": fold["metrics"],
+                             "tuning_boundary": fold["tuning_boundary"]}
+                            for fold in model["fold_results"]],
+            "outer_summary": model["outer_summary"],
+            "final_selected_params": model["best_params"],
+            "final_inner_search": model.get("final_inner_search"),
+            "final_refit": model.get("final_refit"),
+            "tuning_boundary": model["tuning_boundary"],
+        }
+    unresolved = []
+    semantics = plan.get("semantics")
+    if semantics is None:
+        unresolved.append("Structured target semantics and FP/FN costs were not recorded in schema v2")
+    else:
+        for field in ("target_meaning", "positive_class_meaning", "false_positive_cost", "false_negative_cost"):
+            if semantics[field] is None:
+                unresolved.append(field)
+    provenance = plan.get("feature_provenance", {})
+    for feature, record in provenance.items():
+        if record["status"] == "unknown":
+            unresolved.append(f"feature_provenance:{feature}")
+    if any(fold["inner_search"] is None for model in models.values() for fold in model["outer_folds"]):
+        unresolved.append("Per-outer-fold inner-CV candidate scores were not preserved")
+    return {
+        "audit_scope": "training_only",
+        "held_out_data_accessed_by_audit": False,
+        "training_verification": verification,
+        "training_source": results["training_source"],
+        "variant": variant_name,
+        "preferred_model": preferred_model,
+        "selection_review": selection_review,
+        "semantics": semantics,
+        "feature_provenance": provenance,
+        "candidate_selection": plan.get("candidate_selection"),
+        "metric": plan["metrics"],
+        "models": models,
+        "unresolved": unresolved,
+    }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--training-results", required=True, type=Path)
+    parser.add_argument("--lock", type=Path)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    result = audit(args.training_results, args.lock)
+    if args.output:
+        write_json(args.output, result)
+    print(result)

@@ -1,4 +1,4 @@
-"""Shared contracts for train-only development and frozen evaluation (schema v2)."""
+"""Shared contracts for train-only development and frozen evaluation."""
 import hashlib
 import importlib.metadata
 import json
@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
@@ -21,12 +23,37 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, OrdinalEncoder, RobustScaler, StandardScaler
+from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+
+class CalibratedSVC(ClassifierMixin, BaseEstimator):
+    """SVC with explicit fold-local probability calibration and a flat grid surface."""
+
+    def __init__(self, C=1.0, kernel="rbf", gamma="scale", class_weight=None,
+                 random_state=None, calibration_cv=3, cache_size=512):
+        self.C, self.kernel, self.gamma, self.class_weight = C, kernel, gamma, class_weight
+        self.random_state, self.calibration_cv, self.cache_size = random_state, calibration_cv, cache_size
+
+    def fit(self, x, y):
+        estimator = SVC(C=self.C, kernel=self.kernel, gamma=self.gamma, class_weight=self.class_weight,
+                        random_state=self.random_state, cache_size=self.cache_size)
+        self.calibrated_ = CalibratedClassifierCV(estimator, cv=self.calibration_cv, ensemble=False).fit(x, y)
+        self.classes_ = self.calibrated_.classes_
+        self.n_features_in_ = self.calibrated_.n_features_in_
+        return self
+
+    def predict(self, x):
+        return self.calibrated_.predict(x)
+
+    def predict_proba(self, x):
+        return self.calibrated_.predict_proba(x)
+
 
 ESTIMATORS = {
     "logistic_regression": LogisticRegression, "random_forest": RandomForestClassifier,
     "extra_trees": ExtraTreesClassifier, "decision_tree": DecisionTreeClassifier,
     "knn": KNeighborsClassifier, "gaussian_nb": GaussianNB,
+    "support_vector_classifier": CalibratedSVC,
 }
 METRICS = {"accuracy", "balanced_accuracy", "f1", "precision", "recall", "f1_macro",
            "f1_weighted", "precision_macro", "recall_macro", "average_precision",
@@ -137,12 +164,15 @@ def pipeline(plan, spec):
     prep = ColumnTransformer([("numeric", Pipeline(num), plan["numeric_features"]),
                               ("categorical", cat, plan["categorical_features"])])
     defaults = {}
-    if spec["type"] in {"logistic_regression", "random_forest", "extra_trees", "decision_tree"}:
+    if spec["type"] in {"logistic_regression", "random_forest", "extra_trees", "decision_tree",
+                        "support_vector_classifier"}:
         defaults["random_state"] = plan["seed"]
     if spec["type"] == "logistic_regression":
         defaults["max_iter"] = 3000
     if spec["type"] in {"random_forest", "extra_trees"}:
         defaults.update(n_estimators=150, n_jobs=1)
+    if spec["type"] == "support_vector_classifier":
+        defaults.update(calibration_cv=3, cache_size=512)
     defaults.update(spec.get("params", {}))
     return Pipeline([("preprocess", prep), ("model", ESTIMATORS[spec["type"]](**defaults))])
 

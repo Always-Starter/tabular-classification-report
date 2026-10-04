@@ -3,6 +3,7 @@
 import argparse
 import copy
 import hashlib
+import re
 import warnings
 from pathlib import Path
 
@@ -32,6 +33,25 @@ def numeric_grid_boundaries(grid, selected):
             edges[parameter] = {"selected": choice, "edge": edge,
                                 "evaluated_min": ordered[0], "evaluated_max": ordered[-1]}
     return edges
+
+
+def search_evidence(search, metric):
+    """Return JSON-safe candidate-level inner-CV evidence for an audit trail."""
+    results = search.cv_results_
+    split_columns = sorted((key for key in results if re.fullmatch(r"split\d+_test_score", key)),
+                           key=lambda key: int(key[5:key.index("_")]))
+    direction = -1 if metric == "log_loss" else 1
+    candidates = []
+    for index, params in enumerate(results["params"]):
+        candidates.append({
+            "params": params,
+            "mean_score": float(direction * results["mean_test_score"][index]),
+            "std_score": float(results["std_test_score"][index]),
+            "rank": int(results["rank_test_score"][index]),
+            "split_scores": [float(direction * results[key][index]) for key in split_columns],
+        })
+    return {"metric": metric, "inner_splits": len(split_columns), "best_index": int(search.best_index_),
+            "best_score": float(direction * search.best_score_), "candidates": candidates}
 
 
 def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
@@ -70,7 +90,7 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                     for p in variants.values() for s in p["models"])
     if fit_count > max_fits:
         raise ValueError(f"Planned {fit_count} fits exceed budget {max_fits}; reduce grid/folds/sensitivities")
-    # The bundled six estimators use dense output. Stop before an accidental large expansion.
+    # The bundled estimators use dense output. Stop before an accidental large expansion.
     for p in variants.values():
         actual_predictors = set(frame.columns) - {p["target"]}
         declared_predictors = set(p["features"]) | set(p["excluded_features"])
@@ -86,8 +106,13 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                          if cfg["categorical_encoder"] == "onehot" else 1 for c in p["categorical_features"])
             if len(x) * max(width, 1) * 8 > 512 * 1024**2:
                 raise ValueError("Estimated dense encoding exceeds 512 MiB; review high-cardinality encoding or extend sparse support")
+            if spec["type"] == "support_vector_classifier":
+                kernels = set(spec["grid"].get("model__kernel", [spec["params"].get("kernel", "rbf")]))
+                if kernels - {"linear"} and len(x) ** 2 * 8 > 2 * 1024**3:
+                    raise ValueError("Nonlinear SVM candidate exceeds the conservative 2 GiB pairwise-kernel guard; "
+                                     "use a justified linear kernel, smaller training set, or an explicitly tested scalable method")
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = {"schema_version": 2, "created_at": utcnow(), "test_data_accessed": False,
+    result = {"schema_version": plan["schema_version"], "created_at": utcnow(), "test_data_accessed": False,
               "training_source": {"path": str(Path(train).resolve()), "sha256": training_hash, "sheet": sheet},
               "input_rows": len(frame), "eligible_rows": len(d), "missing_targets": int((~valid).sum()),
               "class_order": order, "class_counts": {c: int(sum(y == c)) for c in order},
@@ -114,7 +139,8 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                     pred, prob = predictions(search, x.iloc[b], order, p)
                     fold = score_metrics(y[b], pred, prob, order, p)
                     fold.update(fold=i + 1, best_params=search.best_params_,
-                                tuning_boundary=numeric_grid_boundaries(spec["grid"], search.best_params_))
+                                tuning_boundary=numeric_grid_boundaries(spec["grid"], search.best_params_),
+                                inner_search=search_evidence(search, p["metrics"]["primary"]))
                     folds.append(fold)
                     records.extend({"source_row": int(source_rows[row]), "fold": i + 1,
                                     "actual": str(y[row]), "prediction": str(pred[j]), "probabilities": prob[j].tolist()}
@@ -141,6 +167,9 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=1200):
                     "tuning_boundary": numeric_grid_boundaries(spec["grid"], search.best_params_),
                     "estimator_params": search.best_estimator_.named_steps["model"].get_params(),
                     "final_inner_selection_score": float(-search.best_score_ if metric == "log_loss" else search.best_score_),
+                    "final_inner_search": search_evidence(search, metric),
+                    "final_refit": {"fit_rows": len(y), "refit": True, "selection_metric": metric,
+                                    "inner_splits": cv["inner_splits"], "split_seed": plan["seed"] + 99},
                     "outer_summary": summary, "fold_results": folds, "oof_rows": len(records),
                     "oof": {"path": str(oof_path.relative_to(output_dir)), "sha256": sha(oof_path)},
                     "artifact": {"path": str(model_path.relative_to(output_dir)), "sha256": sha(model_path)}}

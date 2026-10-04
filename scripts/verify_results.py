@@ -100,6 +100,9 @@ def verify_training(path):
                 if [r["source_row"] for r in subset] != split["valid_source_rows"]:
                     raise ValueError("OOF rows do not match saved validation split")
                 compare(fold, recompute(subset, result["class_order"], variant["plan"]))
+                if variant["plan"].get("schema_version", 2) >= 3:
+                    audit_search(fold.get("inner_search"), fold["best_params"],
+                                 variant["plan"]["metrics"]["primary"])
             for metric, summary in model["outer_summary"].items():
                 values = [f["metrics"][metric] for f in model["fold_results"]]
                 if values != summary["folds"] or summary["defined_folds"] != sum(v is not None for v in values):
@@ -110,7 +113,33 @@ def verify_training(path):
                 elif (not np.isclose(np.mean(values), summary["mean"])
                       or not np.isclose(np.std(values, ddof=1), summary["std"])):
                     raise ValueError("Outer summary mismatch")
+            if variant["plan"].get("schema_version", 2) >= 3:
+                audit_search(model.get("final_inner_search"), model["best_params"],
+                             variant["plan"]["metrics"]["primary"])
+                refit = model.get("final_refit", {})
+                expected = {"fit_rows": result["eligible_rows"], "refit": True,
+                            "selection_metric": variant["plan"]["metrics"]["primary"],
+                            "inner_splits": variant["plan"]["cv"]["inner_splits"],
+                            "split_seed": variant["plan"]["seed"] + 99}
+                if refit != expected:
+                    raise ValueError("Final refit evidence mismatch")
     return {"verified": True, "training_results_sha256": sha(path)}
+
+
+def audit_search(evidence, selected, metric):
+    if not isinstance(evidence, dict) or evidence.get("metric") != metric:
+        raise ValueError("Missing or invalid inner-CV evidence")
+    candidates = evidence.get("candidates")
+    index = evidence.get("best_index")
+    if not isinstance(candidates, list) or not candidates or type(index) is not int or not 0 <= index < len(candidates):
+        raise ValueError("Invalid inner-CV candidate evidence")
+    winner = candidates[index]
+    if winner.get("params") != selected or winner.get("rank") != 1:
+        raise ValueError("Inner-CV winner differs from selected parameters")
+    if not np.isclose(winner.get("mean_score"), evidence.get("best_score")):
+        raise ValueError("Inner-CV best score mismatch")
+    if any(len(candidate.get("split_scores", [])) != evidence.get("inner_splits") for candidate in candidates):
+        raise ValueError("Inner-CV split evidence mismatch")
 
 
 if __name__ == "__main__":

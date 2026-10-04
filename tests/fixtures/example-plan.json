@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "target": "label",
   "task": "binary",
   "positive_class": "no",
@@ -17,6 +17,15 @@
     "category"
   ],
   "excluded_features": {},
+  "semantics": {
+    "target_source": "user",
+    "target_meaning": "Synthetic software-test label.",
+    "positive_class_meaning": "Synthetic class used only to exercise metric handling.",
+    "false_positive_cost": null,
+    "false_negative_cost": null,
+    "row_dependence": "independent"
+  },
+  "feature_provenance": {},
   "seed": 1729,
   "cv": {
     "strategy": "stratified",
@@ -32,8 +41,27 @@
       "recall",
       "roc_auc",
       "average_precision"
-    ]
+    ],
+    "rationale": "Synthetic binary fixture exercises threshold metrics with a non-last positive class.",
+    "status": "confirmed"
   },
+  "candidate_selection": {
+    "registry_snapshot": [
+      "decision_tree",
+      "extra_trees",
+      "gaussian_nb",
+      "knn",
+      "logistic_regression",
+      "random_forest",
+      "support_vector_classifier"
+    ],
+    "basis": ["rule_based_registry", "training_diagnosis"],
+    "rationale": "A linear and a tree boundary provide a compact synthetic contrast.",
+    "considered_alternatives": {
+      "support_vector_classifier": "Excluded from the default fixture to keep software tests fast."
+    }
+  },
+  "model_count_rationale": "Two complementary families are sufficient for this synthetic contract test.",
   "models": [
     {
       "name": "linear",
@@ -47,6 +75,9 @@
           1
         ]
       },
+      "rationale": "Exercise a scaled linear probabilistic classifier.",
+      "grid_rationale": "Two C values exercise bounded regularisation selection.",
+      "stopping_rule": "Stop after the predefined inner-CV grid.",
       "preprocessing": {
         "numeric_imputer": "median",
         "missing_indicator": true,
@@ -68,6 +99,9 @@
           2
         ]
       },
+      "rationale": "Exercise an unscaled nonlinear tree classifier.",
+      "grid_rationale": "Two leaf sizes exercise bounded complexity selection.",
+      "stopping_rule": "Stop after the predefined inner-CV grid.",
       "preprocessing": {
         "numeric_imputer": "median",
         "missing_indicator": true,

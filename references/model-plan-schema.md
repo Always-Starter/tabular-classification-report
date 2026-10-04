@@ -1,22 +1,25 @@
-# Executable plan contract (schema v2)
+# Executable plan contract (schema v3)
 
-`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example. Never run a v1 plan unchanged: v2 requires explicit decisions that v1 silently hardcoded.
+`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example. Schema v2 remains readable for preserved runs; create new plans as v3.
 
 Top-level fields:
 
 | Field | Contract |
 | --- | --- |
-| schema_version | 2 |
+| schema_version | 3 |
 | target, task | Column name; `binary` or `multiclass` |
 | features | Nonempty ordered predictor names; excludes target |
 | numeric_features, categorical_features | Disjoint lists exactly partitioning features |
 | excluded_features | Object mapping excluded column names to reasons; every training predictor must be selected or explicitly excluded, in every variant |
+| semantics | Structured target source/meaning, positive-class meaning, FP/FN costs and row-dependence status; use null/unknown rather than inference |
+| feature_provenance | Material feature provenance records: derivation, outcome-information use, prediction-time availability and confirmed/unknown status |
 | positive_class, threshold | Binary only: string class and fixed threshold in [0,1]; omit both for multiclass |
 | seed | Nonnegative integer |
 | cv | strategy, outer_splits and inner_splits (2–10); see below |
-| metrics | primary string; secondary list, unique across both |
+| metrics | primary string; secondary list, rationale and confirmed/provisional status |
+| candidate_selection | Exact registry snapshot, selection basis, shortlist rationale and considered alternatives |
 | models | Two or three named model specifications in this implementation; two is the default, a third needs a documented training-data reason (not an explicit Variant 2 limit) |
-| model_count_rationale | Required nonempty string for three models; optional for two. Explain the distinct comparison question, not a hoped-for score gain. |
+| model_count_rationale | Required nonempty string for every v3 plan. Explain why the selected count is sufficient, not a hoped-for score gain. |
 | decision_trace | Nonempty list of observation/decision/rationale/human_review_point strings |
 | sensitivities | Zero to three predeclared sensitivity specifications |
 
@@ -38,7 +41,7 @@ Group/time columns must appear in `excluded_features`. Training checks fold feas
 
 ## Per-model specification
 
-Each object has `name` (lowercase safe filename), `type`, `params` (fixed estimator parameters), `grid` (list-valued `model__` parameters), and `preprocessing`. Types: `logistic_regression`, `random_forest`, `extra_trees`, `decision_tree`, `knn`, `gaussian_nb`.
+Each object has `name` (lowercase safe filename), `type`, `params` (fixed estimator parameters), `grid` (list-valued `model__` parameters), `preprocessing`, `rationale`, `grid_rationale`, and `stopping_rule`. Types: `logistic_regression`, `random_forest`, `extra_trees`, `decision_tree`, `knn`, `gaussian_nb`, `support_vector_classifier`.
 
 Preprocessing requires:
 
@@ -50,7 +53,9 @@ Preprocessing requires:
 
 Only estimator parameters are tuned in `grid`. Use a declared sensitivity for preprocessing/feature/threshold alternatives. Empty grid `{}` means one fixed candidate. Up to 16 candidates per model; default total budget 1200 fits including refits and sensitivities. Estimator seeds are controlled by the top-level seed; internal jobs are 1. Unspecified estimator defaults are resolved and saved in training results; package versions are recorded. This runner produces dense encoded features and rejects a conservative estimated matrix above 512 MiB; high-cardinality/sparse datasets may need an extension.
 
-Before fitting, justify the primary metric, each candidate family and per-model preprocessing from the training diagnosis. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. For numeric grids with at least two distinct values, development results save `tuning_boundary` for outer-fold and final-inner choices at the lowest/highest evaluated value. This is uncertainty disclosure, not permission to extend a search after reviewing outer/test scores.
+SVM requires standard or robust numeric scaling and currently supports only stratified CV because its three-fold probability calibration is not yet group/time-aware. The runner applies a conservative 2 GiB pairwise-kernel guard to nonlinear candidates. Calibration adds internal work beyond the explicit grid-fit count, so keep SVM grids especially small and document the compute trade-off.
+
+Before fitting, justify the primary metric, candidate-set scope, each family, each grid and per-model preprocessing from the training diagnosis. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. Development results preserve candidate-level inner scores for each outer search and the final full-training search, plus final-refit evidence. For numeric grids with at least two distinct values, results save `tuning_boundary` for outer-fold and final-inner choices at the lowest/highest evaluated value. This is uncertainty disclosure, not permission to extend a search after reviewing outer/test scores.
 
 ## Sensitivities
 

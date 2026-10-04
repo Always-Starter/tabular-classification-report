@@ -61,6 +61,6 @@ Lock seals, optional approval records and one-time receipts are auditable local 
 
 ## Submission notes
 
-The full skill is published at [Always-Starter/tabular-classification-report](https://github.com/Always-Starter/tabular-classification-report). The repository is currently private, so the instructor needs access to install or inspect it. Do not commit runtime output folders; `.gitignore` excludes environments, trained models and generated results. Supply the repository URL and your own details in the actual report metadata. The report is automatically generated as two main pages plus a Reflection draft. The student must verify an output themselves and confirm the Reflection before submission.
+The full skill is published at [Always-Starter/tabular-classification-report](https://github.com/Always-Starter/tabular-classification-report) for instructors to clone and inspect. Do not commit runtime output folders; `.gitignore` excludes environments, trained models and generated results. Supply the repository URL and your own details in the actual report metadata. The report is automatically generated as two main pages plus a Reflection draft. The student must verify an output themselves and confirm the Reflection before submission.
 
 The skill remains generic: do not describe a supplied dataset as customer churn or assign business meanings without source evidence. Four checkpoints, nested CV and a Model Lock are implementation choices; IN6227 grades justified reasoning, reusable implementation, report and Reflection.

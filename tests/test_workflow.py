@@ -25,6 +25,7 @@ from evaluate_holdout import evaluate
 from verify_results import verify, verify_training
 from diagnose_training import diagnose
 from generate_report import generate
+from audit_training_run import audit
 
 
 def example():
@@ -62,9 +63,10 @@ class Contracts(unittest.TestCase):
         p = example(); p["models"][0]["grid"] = {"model__C": [-1]}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__C": list(range(1, 20))}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__random_state": [1]}; cases.append(p)
+        p = example(); p["models"][0]["type"] = "support_vector_classifier"; p["models"][0]["preprocessing"]["scaler"] = "none"; cases.append(p)
         p = example(); p["models"] = p["models"][:1]; cases.append(p)
         p = example(); p["models"].extend([copy.deepcopy(p["models"][0]), copy.deepcopy(p["models"][1])]); cases.append(p)
-        p = example(); p["models"].append(copy.deepcopy(p["models"][0])); p["models"][2]["name"] = "third"; cases.append(p)
+        p = example(); p["models"].append(copy.deepcopy(p["models"][0])); p["models"][2]["name"] = "third"; p["model_count_rationale"] = ""; cases.append(p)
         for p in cases:
             with self.subTest(plan=p), self.assertRaises((ValueError, TypeError)):
                 validate(p)
@@ -195,6 +197,16 @@ class Workflow(unittest.TestCase):
                 self.assertEqual(model["oof_rows"], 120)
                 self.assertIn("tuning_boundary", model)
                 self.assertTrue(all("tuning_boundary" in fold for fold in model["fold_results"]))
+                self.assertIn("final_inner_search", model)
+                self.assertEqual(model["final_refit"]["fit_rows"], 120)
+                for fold in model["fold_results"]:
+                    self.assertEqual(fold["inner_search"]["inner_splits"], 2)
+                    self.assertTrue(all(len(candidate["split_scores"]) == 2
+                                        for candidate in fold["inner_search"]["candidates"]))
+        audited = audit(self.development / "training_results.json")
+        self.assertEqual(audited["audit_scope"], "training_only")
+        self.assertFalse(audited["held_out_data_accessed_by_audit"])
+        self.assertIsNotNone(audited["models"]["linear"]["outer_folds"][0]["inner_search"])
         m = joblib.load(self.development / "baseline/linear.joblib")
         learned = m.named_steps["preprocess"].named_transformers_["numeric"].named_steps["imputer"].statistics_
         self.assertTrue(np.allclose(learned, frame()[["x1", "x2"]].median().to_numpy()))
@@ -337,6 +349,9 @@ class Workflow(unittest.TestCase):
             self.assertIn("Positive class: no. TN = true negatives", report)
             self.assertIn("| Logistic regression | F1 (no) |", report)
             self.assertIn("|  | precision (no) |", report)
+            self.assertIn("## Human in the Loop", report)
+            self.assertIn("## Critical Evaluation", report)
+            self.assertIn("## Trustworthiness", report)
             self.assertNotIn("Automated verification aid", report)
             self.assertNotIn('"numeric_imputer"', report)
             locked_hashes = read_json(lock)["code_sha256"]
@@ -384,7 +399,9 @@ class Workflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp); p = example(); p["task"] = "multiclass"
             del p["positive_class"], p["threshold"]
-            p["metrics"] = {"primary": "f1_macro", "secondary": ["accuracy", "log_loss", "roc_auc_ovr_macro"]}
+            p["metrics"] = {"primary": "f1_macro", "secondary": ["accuracy", "log_loss", "roc_auc_ovr_macro"],
+                            "rationale": "Exercise multiclass metrics in the synthetic workflow.", "status": "confirmed"}
+            p["semantics"]["positive_class_meaning"] = None
             train = tmp / "train.csv"; frame(120, True).to_csv(train, index=False)
             write_json(tmp / "plan.json", p)
             run(train, tmp / "plan.json", tmp / "dev")

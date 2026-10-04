@@ -13,12 +13,15 @@ def require(condition, message):
 
 
 def validate(plan):
+    require(plan.get("schema_version") in {2, 3}, "Only plan schema_version 2 or 3 is supported")
+    schema = plan["schema_version"]
     required = {"schema_version", "target", "task", "features", "numeric_features", "categorical_features",
                 "excluded_features", "seed", "cv", "metrics", "models", "decision_trace", "sensitivities"}
+    if schema == 3:
+        required |= {"semantics", "feature_provenance", "candidate_selection", "model_count_rationale"}
     require(required <= plan.keys(), f"Missing plan fields: {sorted(required - plan.keys())}")
     allowed = required | {"positive_class", "threshold", "model_count_rationale"}
     require(set(plan) <= allowed, f"Unknown plan fields: {set(plan) - allowed}")
-    require(plan["schema_version"] == 2, "Only plan schema_version 2 is supported")
     require(plan["task"] in {"binary", "multiclass"}, "task must be binary or multiclass")
     require(isinstance(plan["target"], str) and bool(plan["target"]), "target must be a column name")
     for key in ("features", "numeric_features", "categorical_features"):
@@ -31,6 +34,46 @@ def validate(plan):
     require(isinstance(plan["excluded_features"], dict) and all(isinstance(v, str) and v.strip() for v in plan["excluded_features"].values()), "Excluded features need reasons")
     require(not (features & set(plan["excluded_features"])), "Excluded features cannot also be selected")
     require(plan["target"] not in plan["excluded_features"], "Target is not an excluded predictor")
+    if schema == 3:
+        semantics = plan["semantics"]
+        semantic_fields = {"target_source", "target_meaning", "positive_class_meaning",
+                           "false_positive_cost", "false_negative_cost", "row_dependence"}
+        require(set(semantics) == semantic_fields, "Schema v3 semantics fields are incomplete")
+        require(semantics["target_source"] in {"user", "authoritative_metadata", "provisionally_inferred"},
+                "Invalid target_source")
+        for key in ("target_meaning", "positive_class_meaning"):
+            require(semantics[key] is None or isinstance(semantics[key], str) and semantics[key].strip(),
+                    f"{key} must be a nonempty string or null")
+        for key in ("false_positive_cost", "false_negative_cost"):
+            require(semantics[key] is None or type(semantics[key]) in {int, float} and semantics[key] >= 0,
+                    f"{key} must be a nonnegative number or null")
+        require(semantics["row_dependence"] in {"independent", "grouped", "temporal", "unknown"},
+                "Invalid row_dependence")
+        provenance = plan["feature_provenance"]
+        require(isinstance(provenance, dict), "feature_provenance must be an object")
+        for name, record in provenance.items():
+            require(name in features or name in plan["excluded_features"], "Provenance feature is not declared")
+            require(set(record) == {"derivation", "uses_outcome_information", "prediction_time_available", "status"},
+                    "Feature provenance fields are incomplete")
+            require(record["derivation"] is None or isinstance(record["derivation"], str) and record["derivation"].strip(),
+                    "Feature derivation must be a nonempty string or null")
+            require(record["uses_outcome_information"] in {True, False, None}, "Invalid outcome-information status")
+            require(record["prediction_time_available"] in {True, False, None}, "Invalid prediction-time status")
+            require(record["status"] in {"confirmed", "unknown"}, "Invalid provenance status")
+        selection = plan["candidate_selection"]
+        require(set(selection) == {"registry_snapshot", "basis", "rationale", "considered_alternatives"},
+                "candidate_selection fields are incomplete")
+        require(selection["registry_snapshot"] == sorted(ESTIMATORS),
+                "registry_snapshot must exactly record the available estimator families")
+        require(isinstance(selection["basis"], list) and bool(selection["basis"])
+                and set(selection["basis"]) <= {"training_diagnosis", "user", "rule_based_registry"},
+                "Invalid candidate-selection basis")
+        require(isinstance(selection["rationale"], str) and selection["rationale"].strip(),
+                "Candidate selection needs a rationale")
+        require(isinstance(selection["considered_alternatives"], dict)
+                and all(k in ESTIMATORS and isinstance(v, str) and v.strip()
+                        for k, v in selection["considered_alternatives"].items()),
+                "Considered alternatives must map registry families to reasons")
     require(type(plan["seed"]) is int and 0 <= plan["seed"] < 2**32 - 100, "Invalid seed")
     cv = plan["cv"]
     require(set(cv) <= {"strategy", "outer_splits", "inner_splits", "group_column", "time_column", "gap"}, "Unknown CV fields")
@@ -42,7 +85,12 @@ def validate(plan):
         require(isinstance(column, str) and column in plan["excluded_features"] and column != plan["target"], "Group/time column must be explicitly excluded from features")
     require(type(cv.get("gap", 0)) is int and cv.get("gap", 0) >= 0, "gap must be a nonnegative count of distinct timestamps")
     metrics = plan["metrics"]
-    require(set(metrics) == {"primary", "secondary"} and isinstance(metrics["secondary"], list), "metrics needs primary and secondary")
+    metric_fields = {"primary", "secondary"} if schema == 2 else {"primary", "secondary", "rationale", "status"}
+    require(set(metrics) == metric_fields and isinstance(metrics["secondary"], list), "Invalid metrics fields")
+    if schema == 3:
+        require(isinstance(metrics["rationale"], str) and metrics["rationale"].strip(), "Metric needs a rationale")
+        require(metrics["status"] in {"confirmed", "provisional_unknown_semantics", "provisional_unknown_costs"},
+                "Invalid metric status")
     requested = [metrics["primary"], *metrics["secondary"]]
     require(all(isinstance(m, str) and m in METRICS for m in requested), "Unsupported metric")
     require(len(requested) == len(set(requested)), "Metrics must be unique")
@@ -59,15 +107,21 @@ def validate(plan):
         require(all(isinstance(v, str) and v.strip() for v in decision.values()), "Decision evidence cannot be empty")
     require(isinstance(plan["models"], list) and 2 <= len(plan["models"]) <= 3,
             "Compare two or three models; a third needs a documented reason")
-    if len(plan["models"]) == 3:
+    if len(plan["models"]) == 3 or schema == 3:
         require(isinstance(plan.get("model_count_rationale"), str) and bool(plan["model_count_rationale"].strip()),
-                "A third model needs a nonempty model_count_rationale grounded in training evidence")
+                "Model count needs a nonempty rationale grounded in training evidence")
     elif "model_count_rationale" in plan:
         require(isinstance(plan["model_count_rationale"], str) and bool(plan["model_count_rationale"].strip()),
                 "model_count_rationale must be nonempty when supplied")
     names = []
     for spec in plan["models"]:
-        require(set(spec) == {"name", "type", "params", "grid", "preprocessing"}, "Each model needs name/type/params/grid/preprocessing")
+        model_fields = {"name", "type", "params", "grid", "preprocessing"}
+        if schema == 3:
+            model_fields |= {"rationale", "grid_rationale", "stopping_rule"}
+        require(set(spec) == model_fields, "Invalid per-model fields")
+        if schema == 3:
+            for key in ("rationale", "grid_rationale", "stopping_rule"):
+                require(isinstance(spec[key], str) and spec[key].strip(), f"Model {key} must be nonempty")
         require(isinstance(spec["name"], str) and re.fullmatch(r"[a-z][a-z0-9_]{0,39}", spec["name"]), "Unsafe model name")
         names.append(spec["name"])
         require(spec["type"] in ESTIMATORS, f"Unsupported estimator: {spec['type']}; extend and test explicitly")
@@ -84,6 +138,12 @@ def validate(plan):
         require(all(k.startswith("model__") for k in spec["grid"]), "Grid tunes estimator parameters; declare preprocessing sensitivity separately")
         require(not ({"random_state", "n_jobs"} & set(spec["params"])), "Seeds/jobs are controlled by the runner")
         require(not ({"model__random_state", "model__n_jobs"} & set(spec["grid"])), "Do not tune random seeds/jobs")
+        if spec["type"] == "support_vector_classifier":
+            require(cfg["scaler"] != "none", "SVM requires declared numeric scaling")
+            require(plan["cv"]["strategy"] == "stratified",
+                    "Calibrated SVM currently supports only stratified CV; extend calibration splits before grouped/time use")
+            require("probability" not in spec["params"] and "model__probability" not in spec["grid"],
+                    "SVM probability calibration is controlled by the runner")
         candidates = list(ParameterGrid(spec["grid"]))
         require(len(candidates) <= 16, "Limited tuning allows at most 16 candidates per model")
         model = pipeline(plan, spec)
@@ -114,4 +174,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan")
     validate(read_json(parser.parse_args().plan))
-    print("Plan v2 is valid")
+    print("Plan is valid")
