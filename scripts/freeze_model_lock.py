@@ -23,6 +23,11 @@ def freeze(results, model_dir, review_path, output, require_human_approval=False
         raise ValueError("The selected development variant is not eligible for Model Lock")
     if review["preferred_model"] not in selected["models"]:
         raise ValueError("Preferred model is not in selected variant")
+    if r.get("schema_version", 2) >= 6:
+        expected = r.get("model_selection", {}).get("selected_model")
+        if review["preferred_model"] != expected:
+            raise ValueError(f"Preferred model {review['preferred_model']!r} conflicts with the predeclared "
+                             f"executable selection policy, which selected {expected!r}")
     if r["code_sha256"] != code_hashes() or r["environment"] != environment():
         raise ValueError("Code or environment changed since CV; rerun development before locking")
     artifacts = {}
@@ -34,6 +39,7 @@ def freeze(results, model_dir, review_path, output, require_human_approval=False
     lock = {"schema_version": 2, "status": "frozen", "created_at": utcnow(),
             "human_approval_required": require_human_approval,
             "plan": selected["plan"], "class_order": r["class_order"], "review": review,
+            "model_selection": r.get("model_selection"),
             "training_source": r["training_source"], "eligible_training_rows": r["eligible_rows"],
             "models": selected["models"], "artifacts": artifacts,
             "environment": r["environment"], "code_sha256": r["code_sha256"],

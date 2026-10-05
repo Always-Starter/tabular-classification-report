@@ -12,9 +12,10 @@ import numpy as np
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.model_selection import GridSearchCV, ParameterGrid
 
-from common import (PrimaryScorer, code_hashes, decisions_from_probabilities, environment, features,
-                    load_table, ordered_probabilities, pipeline, predictions, read_json, score_metrics,
-                    sha, splits, threshold_policy, utcnow, write_json)
+from common import (PrimaryScorer, code_hashes, decisions_from_probabilities, effective_fixed_params,
+                    environment, execution_controls, features, load_table, model_selection_evidence,
+                    ordered_probabilities, pipeline, predictions, read_json, score_metrics, sha, splits,
+                    threshold_policy, utcnow, write_json)
 from validate_plan import validate
 
 
@@ -258,6 +259,8 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=None):
                                   "defined_folds": sum(v is not None for v in values)}
                 vr["models"][spec["name"]] = {
                     "type": spec["type"], "best_params": best_params, "selected_threshold": selected_threshold,
+                    "effective_fixed_params": effective_fixed_params(p, spec),
+                    "execution_controls": execution_controls(p, spec),
                     "tuning_boundary": numeric_grid_boundaries(spec["grid"], best_params),
                     "estimator_params": estimator.named_steps["model"].get_params(),
                     "final_inner_selection_score": final_evidence["best_score"],
@@ -267,6 +270,8 @@ def run(train, plan_path, output_dir, sheet="Data", max_fits=None):
                     "outer_summary": summary, "fold_results": folds, "oof_rows": len(records),
                     "oof": {"path": str(oof_path.relative_to(output_dir)), "sha256": sha(oof_path)},
                     "artifact": {"path": str(model_path.relative_to(output_dir)), "sha256": sha(model_path)}}
+        if plan["schema_version"] >= 6:
+            result["model_selection"] = model_selection_evidence(plan, result["variants"]["baseline"]["models"])
         result["warnings"] = sorted({str(w.message) for w in caught})
     if sha(train) != result["training_source"]["sha256"]:
         raise ValueError("Training file changed during development")
@@ -281,6 +286,6 @@ if __name__ == "__main__":
     parser.add_argument("--sheet", default="Data")
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--max-fits", type=int, help="Optional safety ceiling; schema-v5 plans declare their own budget")
+    parser.add_argument("--max-fits", type=int, help="Optional safety ceiling; schema-v5+ plans declare their own budget")
     args = parser.parse_args()
     run(args.train, args.plan, args.output_dir, args.sheet, args.max_fits)

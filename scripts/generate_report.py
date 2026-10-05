@@ -4,7 +4,7 @@ import argparse
 import re
 from pathlib import Path
 from xml.sax.saxutils import escape
-from common import code_hashes, read_json, sha, threshold_policy, write_json
+from common import code_hashes, effective_fixed_params, execution_controls, read_json, sha, threshold_policy, write_json
 from verify_results import verify, verify_training
 
 
@@ -46,17 +46,21 @@ def preprocessing_text(config):
     return "; ".join(parts)
 
 
-def fixed_param_rationale_text(spec):
+def fixed_param_rationale_text(spec, effective=None):
     """Summarise why fixed parameters were not tuned and where exact values came from."""
-    if not spec["params"]:
+    effective = spec["params"] if effective is None else effective
+    if not effective:
         return "No estimator parameters were fixed"
     records = spec.get("fixed_param_rationale")
     if records is None:
         return "Fixed-parameter provenance was not recorded in this legacy plan"
     parts = []
-    for parameter in spec["params"]:
+    for parameter in effective:
         label = parameter.replace("_", " ")
-        record = records[parameter]
+        record = records.get(parameter)
+        if record is None:
+            parts.append(f"{label} - runner-fixed exact-value provenance missing in this legacy plan")
+            continue
         if record["value_source"] == "unknown":
             value_basis = "exact-value source unknown"
         else:
@@ -105,6 +109,18 @@ def threshold_policy_text(plan, models):
     return (f"Thresholds were jointly selected with model parameters inside inner CV only using "
             f"{policy['objective'].replace('_', ' ')}; final full-training selections: {selected}. "
             "Held-out data did not select or revise them")
+
+
+def model_selection_text(selection):
+    if not selection:
+        return "Legacy run: executable final-family selection evidence was not recorded."
+    policy = selection["policy"]
+    contenders = ", ".join(selection["practical_tie_contenders"])
+    applied = ", ".join(item.replace("_", " ") for item in selection["applied_tie_breakers"])
+    return (f"Predeclared outer-CV {selection['metric'].replace('_', ' ')} policy "
+            f"({selection['direction']}); practical-tie tolerance {policy['practical_tie_tolerance']}; "
+            f"contenders: {contenders}; tie-breakers applied: {applied or 'none'}; "
+            f"selected: {selection['selected_model']}.")
 
 
 def confusion_text(matrix, classes, positive_class=None):
@@ -215,9 +231,10 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     if p.get("schema_version", 2) >= 5:
         if not isinstance(evidence_summary, dict) or set(evidence_summary) != set(evidence_keys) or any(
                 not isinstance(evidence_summary[key], str) or not evidence_summary[key].strip() for key in evidence_keys):
-            raise ValueError("Schema-v5 reports require fact/interpretation/limitation_unknown/decision/future_work evidence_summary")
+            raise ValueError("Schema-v5+ reports require fact/interpretation/limitation_unknown/decision/future_work evidence_summary")
     draft = bool(missing) or not n["human_reflection_confirmed"]
     metric = p["metrics"]["primary"]
+    selection = tr.get("model_selection")
     model_labels = {spec["name"]: model_label(spec) for spec in p["models"]}
     if missing and not n["human_reflection_confirmed"]:
         draft_note = " | DRAFT - metadata and Reflection pending"
@@ -247,7 +264,11 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                    + (" This is a presentation-only derivative from verified saved evidence; no model was refitted."
                       if presentation_only_rerender else ""))
     else:
-        summary_emphasis = f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}."
+        selected = selection["selected_model"] if selection else None
+        summary_emphasis = (f"Development-only prespecified choice: {model_labels[selected]}. "
+                            f"Primary measure: {metric.replace('_', ' ')}."
+                            if selected else
+                            f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}.")
         summary = summary_emphasis + " No independent held-out result is claimed."
     add(0, "At a glance", summary)
     submission_rows = [
@@ -267,19 +288,23 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     add(0, "Preprocessing and feature decisions", n["preprocessing"] + " " + n["features"])
     for spec in p["models"]:
         model = vr["models"][spec["name"]]
+        effective = model.get("effective_fixed_params", effective_fixed_params(p, spec))
         boundary = model.get("tuning_boundary", {})
         add(0, f"Model: {model_labels[spec['name']]}", "Preparation: " + preprocessing_text(spec["preprocessing"])
             + (f". Imbalance handling: {spec['imbalance_handling']['strategy'].replace('_', ' ')} "
                f"({spec['imbalance_handling']['basis'].replace('_', ' ')})" if spec.get("imbalance_handling") else "")
             + ". Selected settings: " + settings_text(model["best_params"])
-            + ". Fixed settings: " + settings_text(spec["params"]) + ". "
-            + fixed_param_rationale_text(spec) + "."
+            + ". Fixed settings: " + settings_text(effective)
+            + ". Execution controls: " + settings_text(
+                model.get("execution_controls", execution_controls(p, spec))) + ". "
+            + fixed_param_rationale_text(spec, effective) + "."
             + (" Search-boundary interpretation: " + tuning_boundary_text(boundary, spec["grid"]) + "."
                if boundary else ""))
     add(0, "Model choice and stopping rules", n["model_rationale"]
         + f" The declared search used {tr['planned_fits']} planned fits across baseline and sensitivity analyses; "
         + "outer folds did not trigger grid expansion or a change of primary metric. Sensitivity variants were "
-        + "interpreted as robustness evidence only and were not eligible for selection or locking.")
+        + "interpreted as robustness evidence only and were not eligible for selection or locking. "
+        + model_selection_text(selection))
     add(1, "Evaluation and comparison", f"Primary metric: {metric.replace('_', ' ')} "
         f"({'lower' if metric == 'log_loss' else 'higher'} is better). "
         f"Nested CV: {p['cv']['strategy']}, {p['cv']['outer_splits']} outer / {p['cv']['inner_splits']} inner folds; seed {p['seed']}. "

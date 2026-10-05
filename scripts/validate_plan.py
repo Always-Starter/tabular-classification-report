@@ -4,7 +4,7 @@ import argparse
 import copy
 import re
 from sklearn.model_selection import ParameterGrid
-from common import ESTIMATORS, METRICS, pipeline, read_json
+from common import ESTIMATORS, MATERIAL_FIXED_PARAMS, METRICS, pipeline, read_json
 
 DECISION_BASES = {"invariant_methodological_rule", "dataset_specific_evidence",
                   "user_domain_constraint", "conventional_default", "unknown"}
@@ -18,7 +18,8 @@ def require(condition, message):
 
 
 def validate(plan):
-    require(plan.get("schema_version") in {2, 3, 4, 5}, "Only plan schema_version 2, 3, 4 or 5 is supported")
+    require(plan.get("schema_version") in {2, 3, 4, 5, 6},
+            "Only plan schema_version 2, 3, 4, 5 or 6 is supported")
     schema = plan["schema_version"]
     required = {"schema_version", "target", "task", "features", "numeric_features", "categorical_features",
                 "excluded_features", "seed", "cv", "metrics", "models", "decision_trace", "sensitivities"}
@@ -26,6 +27,8 @@ def validate(plan):
         required |= {"semantics", "feature_provenance", "candidate_selection", "model_count_rationale"}
     if schema >= 5:
         required.add("compute_budget")
+    if schema >= 6:
+        required.add("model_selection_policy")
     require(required <= plan.keys(), f"Missing plan fields: {sorted(required - plan.keys())}")
     allowed = required | {"positive_class", "threshold", "threshold_policy", "model_count_rationale"}
     require(set(plan) <= allowed, f"Unknown plan fields: {set(plan) - allowed}")
@@ -87,7 +90,7 @@ def validate(plan):
     cv_allowed = {"strategy", "outer_splits", "inner_splits", "group_column", "time_column", "gap"}
     if schema >= 5:
         cv_allowed |= {"rationale", "status", "selection_basis"}
-        require({"rationale", "status", "selection_basis"} <= set(cv), "Schema v5 CV needs rationale, status and selection_basis")
+        require({"rationale", "status", "selection_basis"} <= set(cv), "Schema v5+ CV needs rationale, status and selection_basis")
         require(isinstance(cv["rationale"], str) and cv["rationale"].strip(), "CV rationale is required")
         require(cv["status"] in {"confirmed", "provisional_unknown_dependence"}, "Invalid CV status")
         require(cv["selection_basis"] in DECISION_BASES, "Invalid CV selection_basis")
@@ -112,7 +115,7 @@ def validate(plan):
     if plan["task"] == "binary":
         require(isinstance(plan.get("positive_class"), str), "positive_class must be a string")
         if schema >= 5:
-            require("threshold" not in plan, "Schema v5 uses threshold_policy, not a scalar threshold")
+            require("threshold" not in plan, "Schema v5+ uses threshold_policy, not a scalar threshold")
             policy = plan.get("threshold_policy")
             fields = {"mode", "value", "search_values", "objective", "procedure", "value_source",
                       "value_rationale", "not_tuned_reason", "selection_scope"}
@@ -176,7 +179,7 @@ def validate(plan):
         topics = {item["topic"] for item in plan["decision_trace"]}
         needed = {"target_semantics", "feature_typing", "preprocessing", "imbalance", "model_shortlist",
                   "metric", "cv", "decision_rule", "compute_budget"}
-        require(needed <= topics, f"Schema v5 decision trace is missing topics: {sorted(needed - topics)}")
+        require(needed <= topics, f"Schema v5+ decision trace is missing topics: {sorted(needed - topics)}")
         budget = plan["compute_budget"]
         require(isinstance(budget, dict) and set(budget) == {"max_explicit_fits", "source", "rationale"},
                 "Invalid compute_budget")
@@ -262,12 +265,20 @@ def validate(plan):
         require(all(k.startswith("model__") for k in spec["grid"]), "Grid tunes estimator parameters; declare preprocessing sensitivity separately")
         require(not ({"random_state", "n_jobs"} & set(spec["params"])), "Seeds/jobs are controlled by the runner")
         require(not ({"model__random_state", "model__n_jobs"} & set(spec["grid"])), "Do not tune random seeds/jobs")
+        if schema >= 6:
+            for parameter in MATERIAL_FIXED_PARAMS.get(spec["type"], set()):
+                require(parameter in spec["params"] or f"model__{parameter}" in spec["grid"],
+                        f"Schema v6 requires {spec['type']} to declare material parameter {parameter} "
+                        "as fixed with provenance or tuned in the bounded grid")
         if spec["type"] == "support_vector_classifier":
             require(cfg["scaler"] != "none", "SVM requires declared numeric scaling")
             require(plan["cv"]["strategy"] == "stratified",
                     "Calibrated SVM currently supports only stratified CV; extend calibration splits before grouped/time use")
             require("probability" not in spec["params"] and "model__probability" not in spec["grid"],
                     "SVM probability calibration is controlled by the runner")
+            if schema >= 6:
+                require("cache_size" not in spec["params"] and "model__cache_size" not in spec["grid"],
+                        "SVM cache_size is a recorded runner execution control in schema v6")
             calibration_values = spec["grid"].get(
                 "model__calibration_cv", [spec["params"].get("calibration_cv", 3)])
             require(all(type(value) is int and 2 <= value <= 10 for value in calibration_values),
@@ -285,6 +296,33 @@ def validate(plan):
                         and hasattr(component, "_validate_params")):
                     component._validate_params()
     require(len(names) == len(set(names)), "Model names must be unique")
+    if schema >= 6:
+        policy = plan["model_selection_policy"]
+        fields = {"comparison_source", "metric", "practical_tie_tolerance", "tolerance_source",
+                  "tolerance_rationale", "tie_breakers", "preference_order", "final_refit_procedure"}
+        require(isinstance(policy, dict) and set(policy) == fields,
+                "Schema v6 model_selection_policy fields are incomplete")
+        require(policy["comparison_source"] == "shared_outer_cv"
+                and policy["metric"] == "primary"
+                and policy["tie_breakers"] == ["lower_outer_std", "declared_preference_order"]
+                and policy["final_refit_procedure"] == "final_inner_cv_then_full_training",
+                "Invalid executable model-selection procedure")
+        require(type(policy["practical_tie_tolerance"]) in {int, float}
+                and policy["practical_tie_tolerance"] >= 0,
+                "practical_tie_tolerance must be a nonnegative number")
+        require(policy["tolerance_source"] in {"user_supplied", "authoritative_requirement",
+                                               "prior_independent_evidence", "domain_constraint",
+                                               "conventional_default", "unknown"},
+                "Invalid practical-tie tolerance source")
+        if policy["tolerance_source"] == "unknown":
+            require(policy["tolerance_rationale"] is None,
+                    "Unknown practical-tie tolerance provenance requires null rationale")
+        else:
+            require(isinstance(policy["tolerance_rationale"], str)
+                    and policy["tolerance_rationale"].strip(),
+                    "Explain the pre-fit basis for the practical-tie tolerance")
+        require(policy["preference_order"] == names,
+                "preference_order must list every model exactly once in plan order")
     checks = plan["sensitivities"]
     require(isinstance(checks, list) and len(checks) <= 3, "At most three declared sensitivities")
     seen = set()

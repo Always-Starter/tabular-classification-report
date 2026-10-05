@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from common import read_json, sha, write_json
+from common import effective_fixed_params, execution_controls, read_json, sha, write_json
 from verify_results import verify_training
 
 
@@ -27,6 +27,8 @@ def audit(results_path, lock_path=None):
     models = {}
     for name, model in variant["models"].items():
         spec = next(spec for spec in plan["models"] if spec["name"] == name)
+        effective = model.get("effective_fixed_params", effective_fixed_params(plan, spec))
+        controls = model.get("execution_controls", execution_controls(plan, spec))
         models[name] = {
             "type": model["type"],
             "preprocessing_rationale": spec.get("preprocessing_rationale"),
@@ -34,6 +36,8 @@ def audit(results_path, lock_path=None):
             "predefined_grid": spec["grid"],
             "fixed_params": spec["params"],
             "fixed_param_rationale": spec.get("fixed_param_rationale"),
+            "effective_fixed_params": effective,
+            "execution_controls": controls,
             "outer_folds": [{"fold": fold["fold"], "selected_params": fold["best_params"],
                              "selected_threshold": fold.get("selected_threshold"),
                              "inner_search": fold.get("inner_search"), "outer_metrics": fold["metrics"],
@@ -73,6 +77,9 @@ def audit(results_path, lock_path=None):
             unresolved.extend(f"fixed_param_value_source:{name}:{parameter}"
                               for parameter, record in model["fixed_param_rationale"].items()
                               if record["value_source"] == "unknown")
+        unresolved.extend(f"legacy_runner_fixed_param_provenance:{name}:{parameter}"
+                          for parameter in model["effective_fixed_params"]
+                          if parameter not in (model["fixed_param_rationale"] or {}))
     return {
         "audit_scope": "training_only",
         "held_out_data_accessed_by_audit": False,
@@ -81,6 +88,7 @@ def audit(results_path, lock_path=None):
         "variant": variant_name,
         "preferred_model": preferred_model,
         "selection_review": selection_review,
+        "model_selection": results.get("model_selection"),
         "semantics": semantics,
         "feature_provenance": provenance,
         "candidate_selection": plan.get("candidate_selection"),

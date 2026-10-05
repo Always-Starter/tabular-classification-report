@@ -16,8 +16,8 @@ from pypdf import PdfReader
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from common import (ESTIMATORS, features, load_table, pipeline, predictions, read_json,
-                    score_metrics, sha, splits, write_json)
+from common import (ESTIMATORS, features, load_table, model_selection_evidence, pipeline,
+                    predictions, read_json, score_metrics, sha, splits, write_json)
 from validate_plan import validate
 from run_nested_cv import numeric_grid_boundaries, run
 from freeze_model_lock import freeze
@@ -44,7 +44,7 @@ def frame(n=120, multiclass=False):
 
 
 class Contracts(unittest.TestCase):
-    def test_schema_v5_policy_provenance_and_legacy_readability(self):
+    def test_schema_v6_policy_provenance_and_legacy_readability(self):
         p = example()
         self.assertEqual(validate(p)["threshold_policy"]["value_source"], "conventional_default")
         self.assertEqual(p["cv"]["selection_basis"], "conventional_default")
@@ -52,6 +52,7 @@ class Contracts(unittest.TestCase):
                          {"user_domain_constraint", "dataset_specific_evidence", "conventional_default"})
         legacy = copy.deepcopy(p)
         legacy["schema_version"] = 4
+        legacy.pop("model_selection_policy")
         legacy["threshold"] = legacy.pop("threshold_policy")["value"]
         legacy.pop("compute_budget")
         for key in ("rationale", "status", "selection_basis"):
@@ -191,7 +192,36 @@ class Contracts(unittest.TestCase):
         third["grid"] = {}
         p["models"].append(third)
         p["model_count_rationale"] = "Training diagnosis motivates an additional nonlinear ensemble comparison."
+        p["model_selection_policy"]["preference_order"].append("forest")
         self.assertEqual(len(validate(p)["models"]), 3)
+
+    def test_schema_v6_rejects_undeclared_runner_material_defaults(self):
+        cases = []
+        p = example(); del p["models"][0]["params"]["max_iter"]; del p["models"][0]["fixed_param_rationale"]["max_iter"]; cases.append((p, "max_iter"))
+        p = example(); p["models"][1]["type"] = "random_forest"; p["models"][1]["params"] = {}; p["models"][1]["fixed_param_rationale"] = {}; p["models"][1]["grid"] = {}; cases.append((p, "n_estimators"))
+        p = example(); p["models"][0]["type"] = "support_vector_classifier"; p["models"][0]["params"] = {}; p["models"][0]["fixed_param_rationale"] = {}; cases.append((p, "calibration_cv"))
+        for plan, parameter in cases:
+            with self.subTest(parameter=parameter), self.assertRaisesRegex(ValueError, parameter):
+                validate(plan)
+
+    def test_executable_model_selection_policy_handles_direction_and_ties(self):
+        p = example()
+        models = {
+            "linear": {"outer_summary": {"f1": {"mean": .80, "std": .05}}},
+            "tree": {"outer_summary": {"f1": {"mean": .81, "std": .08}}},
+        }
+        self.assertEqual(model_selection_evidence(p, models)["selected_model"], "tree")
+        p["model_selection_policy"]["practical_tie_tolerance"] = .02
+        self.assertEqual(model_selection_evidence(p, models)["selected_model"], "linear")
+        p["metrics"]["primary"] = "log_loss"
+        models = {
+            "linear": {"outer_summary": {"log_loss": {"mean": .42, "std": .03}}},
+            "tree": {"outer_summary": {"log_loss": {"mean": .45, "std": .02}}},
+        }
+        p["model_selection_policy"]["practical_tie_tolerance"] = 0
+        evidence = model_selection_evidence(p, models)
+        self.assertEqual(evidence["direction"], "minimize")
+        self.assertEqual(evidence["selected_model"], "linear")
 
     def test_nonlast_positive_class_metrics(self):
         p = example()
@@ -280,7 +310,7 @@ class Workflow(unittest.TestCase):
         cls.development = cls.base / "development"
         cls.results = run(cls.train, cls.plan_path, cls.development)
         cls.review = cls.base / "review.json"
-        write_json(cls.review, {"selected_variant": "baseline", "preferred_model": "linear", "rationale": "Synthetic comparison for software testing only",
+        write_json(cls.review, {"selected_variant": "baseline", "preferred_model": cls.results["model_selection"]["selected_model"], "rationale": "Synthetic comparison for software testing only",
                                "selection_rule": "Use the fixture's primary outer-CV comparison, then plan order only if needed.",
                                "tie_breaker": "No substantive tie-breaker claim is made for the software fixture.",
                                "sensitivity_review": "Keep baseline; threshold alternative is a software fixture", "warnings_review": "Reviewed synthetic run warnings"})
@@ -345,6 +375,18 @@ class Workflow(unittest.TestCase):
             payload["selected_variant"] = "threshold_check"
             write_json(review, payload)
             with self.assertRaisesRegex(ValueError, "interpretive and cannot be locked"):
+                freeze(self.development / "training_results.json", self.development, review,
+                       Path(tmp) / "model-lock.json")
+
+    def test_model_lock_rejects_preference_that_conflicts_with_predeclared_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            review = Path(tmp) / "review.json"
+            payload = read_json(self.review)
+            payload["preferred_model"] = next(
+                name for name in self.results["variants"]["baseline"]["models"]
+                if name != self.results["model_selection"]["selected_model"])
+            write_json(review, payload)
+            with self.assertRaisesRegex(ValueError, "conflicts with the predeclared executable selection policy"):
                 freeze(self.development / "training_results.json", self.development, review,
                        Path(tmp) / "model-lock.json")
 
@@ -646,13 +688,14 @@ class Workflow(unittest.TestCase):
             }
             p["models"].append(third)
             p["model_count_rationale"] = "Synthetic three-model software check; no course-data recommendation."
+            p["model_selection_policy"]["preference_order"].append("forest")
             train = tmp / "train.csv"
             frame().to_csv(train, index=False)
             write_json(tmp / "plan.json", p)
             result = run(train, tmp / "plan.json", tmp / "dev")
             self.assertEqual(set(result["variants"]["baseline"]["models"]), {"linear", "tree", "forest"})
             review = tmp / "review.json"
-            write_json(review, {"selected_variant": "baseline", "preferred_model": "linear",
+            write_json(review, {"selected_variant": "baseline", "preferred_model": result["model_selection"]["selected_model"],
                                 "rationale": "Synthetic test", "sensitivity_review": "None declared",
                                 "selection_rule": "Use the prespecified primary outer-CV comparison.",
                                 "tie_breaker": "No tie-breaker was needed in this software test.",

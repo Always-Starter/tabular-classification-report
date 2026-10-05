@@ -3,7 +3,8 @@
 import argparse
 from pathlib import Path
 import numpy as np
-from common import decisions_from_probabilities, read_json, score_metrics, sha, write_json
+from common import (decisions_from_probabilities, effective_fixed_params, execution_controls,
+                    model_selection_evidence, read_json, score_metrics, sha, write_json)
 
 
 def compare(saved, calculated):
@@ -87,6 +88,11 @@ def verify_training(path):
     result = read_json(path)
     for variant in result["variants"].values():
         for name, model in variant["models"].items():
+            if variant["plan"].get("schema_version", 2) >= 6:
+                spec = next(item for item in variant["plan"]["models"] if item["name"] == name)
+                if (model.get("effective_fixed_params") != effective_fixed_params(variant["plan"], spec)
+                        or model.get("execution_controls") != execution_controls(variant["plan"], spec)):
+                    raise ValueError("Effective fixed parameters or execution controls differ from the plan")
             source = (path.parent / model["oof"]["path"]).resolve()
             if not source.is_relative_to(path.parent.resolve()) or sha(source) != model["oof"]["sha256"]:
                 raise ValueError(f"OOF integrity mismatch: {name}")
@@ -123,6 +129,11 @@ def verify_training(path):
                             "split_seed": variant["plan"]["seed"] + 99}
                 if refit != expected:
                     raise ValueError("Final refit evidence mismatch")
+    if result.get("schema_version", 2) >= 6:
+        expected_selection = model_selection_evidence(
+            result["variants"]["baseline"]["plan"], result["variants"]["baseline"]["models"])
+        if result.get("model_selection") != expected_selection:
+            raise ValueError("Saved final-model selection does not follow the predeclared executable policy")
     return {"verified": True, "training_results_sha256": sha(path)}
 
 

@@ -1,6 +1,6 @@
 # Tabular Classification Report
 
-A reusable Agent Skill for selecting and comparing two or three classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, optional one-time held-out evaluation and automatic Markdown/PDF reporting. It was developed and tested with Codex. Claude Code also supports the `SKILL.md` format, but this package has not been tested there. Two models are the usual choice; a third needs a distinct, documented comparison question. This range is an implementation choice, not an explicit Variant 2 model-count rule. No course dataset, model or assessment result is bundled.
+A reusable Agent Skill for selecting and comparing two or three classifiers from training-data evidence, with configurable preprocessing/metrics, nested CV, a pre-fit executable final-family policy, optional one-time held-out evaluation and automatic Markdown/PDF reporting. It was developed and tested with Codex. Claude Code also supports the `SKILL.md` format, but this package has not been tested there. Two models are the usual choice; a third needs a distinct, documented comparison question. This range is an implementation choice, not an explicit Variant 2 model-count rule. No course dataset, model or assessment result is bundled.
 
 ## Installation
 

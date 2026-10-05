@@ -55,6 +55,18 @@ ESTIMATORS = {
     "knn": KNeighborsClassifier, "gaussian_nb": GaussianNB,
     "support_vector_classifier": CalibratedSVC,
 }
+MATERIAL_FIXED_PARAMS = {
+    "logistic_regression": {"max_iter"},
+    "random_forest": {"n_estimators"},
+    "extra_trees": {"n_estimators"},
+    "support_vector_classifier": {"calibration_cv"},
+}
+LEGACY_MATERIAL_DEFAULTS = {
+    "logistic_regression": {"max_iter": 3000},
+    "random_forest": {"n_estimators": 150},
+    "extra_trees": {"n_estimators": 150},
+    "support_vector_classifier": {"calibration_cv": 3},
+}
 METRICS = {"accuracy", "balanced_accuracy", "f1", "precision", "recall", "f1_macro",
            "f1_weighted", "precision_macro", "recall_macro", "average_precision",
            "roc_auc", "roc_auc_ovr_macro", "log_loss"}
@@ -167,14 +179,70 @@ def pipeline(plan, spec):
     if spec["type"] in {"logistic_regression", "random_forest", "extra_trees", "decision_tree",
                         "support_vector_classifier"}:
         defaults["random_state"] = plan["seed"]
-    if spec["type"] == "logistic_regression":
-        defaults["max_iter"] = 3000
     if spec["type"] in {"random_forest", "extra_trees"}:
-        defaults.update(n_estimators=150, n_jobs=1)
+        defaults["n_jobs"] = 1
     if spec["type"] == "support_vector_classifier":
-        defaults.update(calibration_cv=3, cache_size=512)
+        defaults["cache_size"] = 512
+    if plan.get("schema_version", 2) <= 5:
+        defaults.update(LEGACY_MATERIAL_DEFAULTS.get(spec["type"], {}))
     defaults.update(spec.get("params", {}))
     return Pipeline([("preprocess", prep), ("model", ESTIMATORS[spec["type"]](**defaults))])
+
+
+def execution_controls(plan, spec):
+    """Return runner-governed settings that are not modelling choices."""
+    controls = {}
+    if spec["type"] in {"logistic_regression", "random_forest", "extra_trees", "decision_tree",
+                        "support_vector_classifier"}:
+        controls["random_state"] = plan["seed"]
+    if spec["type"] in {"random_forest", "extra_trees"}:
+        controls["n_jobs"] = 1
+    if spec["type"] == "support_vector_classifier":
+        controls["cache_size"] = 512
+    return controls
+
+
+def effective_fixed_params(plan, spec):
+    """Return declared fixed modelling parameters, retaining legacy injected values explicitly."""
+    values = dict(LEGACY_MATERIAL_DEFAULTS.get(spec["type"], {})) if plan.get("schema_version", 2) <= 5 else {}
+    values.update(spec.get("params", {}))
+    return values
+
+
+def model_selection_evidence(plan, models):
+    """Apply the schema-v6 predeclared final-family selection policy to outer-CV summaries."""
+    policy = plan["model_selection_policy"]
+    metric = plan["metrics"]["primary"]
+    direction = "minimize" if metric == "log_loss" else "maximize"
+    rows = []
+    for name in policy["preference_order"]:
+        summary = models[name]["outer_summary"][metric]
+        if summary["mean"] is None or summary["std"] is None:
+            raise ValueError("Final model selection requires defined outer-CV mean and SD for every candidate")
+        rows.append({"model": name, "mean": summary["mean"], "std": summary["std"],
+                     "preference_rank": policy["preference_order"].index(name) + 1})
+    best_value = (min(row["mean"] for row in rows) if direction == "minimize"
+                  else max(row["mean"] for row in rows))
+    tolerance = policy["practical_tie_tolerance"]
+    for row in rows:
+        row["gap_from_numerical_best"] = (row["mean"] - best_value if direction == "minimize"
+                                           else best_value - row["mean"])
+        row["within_practical_tie"] = row["gap_from_numerical_best"] <= tolerance + 1e-15
+    contenders = [row for row in rows if row["within_practical_tie"]]
+    applied = []
+    if len(contenders) > 1:
+        best_std = min(row["std"] for row in contenders)
+        contenders = [row for row in contenders if np.isclose(row["std"], best_std, rtol=0, atol=1e-15)]
+        applied.append("lower_outer_std")
+    if len(contenders) > 1:
+        contenders.sort(key=lambda row: row["preference_rank"])
+        applied.append("declared_preference_order")
+    selected = contenders[0]["model"]
+    return {"policy": policy, "metric": metric, "direction": direction, "numerical_best": best_value,
+            "candidates": rows, "practical_tie_contenders":
+            [row["model"] for row in rows if row["within_practical_tie"]],
+            "applied_tie_breakers": applied, "selected_model": selected,
+            "selection_conditional_outer_score": True}
 
 
 def threshold_policy(plan):

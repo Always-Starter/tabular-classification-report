@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "target": "label",
   "task": "binary",
   "positive_class": "no",
@@ -80,6 +80,22 @@
     }
   },
   "model_count_rationale": "Two complementary families are sufficient for this synthetic contract test.",
+  "model_selection_policy": {
+    "comparison_source": "shared_outer_cv",
+    "metric": "primary",
+    "practical_tie_tolerance": 0.0,
+    "tolerance_source": "conventional_default",
+    "tolerance_rationale": "The synthetic fixture uses exact numerical ties only; a real task should predeclare any practically meaningful margin from domain or independent evidence.",
+    "tie_breakers": [
+      "lower_outer_std",
+      "declared_preference_order"
+    ],
+    "preference_order": [
+      "linear",
+      "tree"
+    ],
+    "final_refit_procedure": "final_inner_cv_then_full_training"
+  },
   "models": [
     {
       "name": "linear",
