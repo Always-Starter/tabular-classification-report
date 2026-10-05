@@ -40,6 +40,13 @@ def demo(output_dir):
                      model_rationale="A linear model and a shallow tree exercise two different decision boundaries. Each grid contains two candidates. These fixture choices are not prescribed for user data.",
                      findings="This report demonstrates the reporting workflow using saved development results. No separate held-out dataset was read or evaluated.",
                      limitations="Synthetic fixture performance is not an estimate for a real application. Error costs and business meanings are unspecified. Sensitivities are empty for this mechanical smoke test.")
+    narrative["evidence_summary"] = {
+        "fact": "Nested CV compared two predeclared pipelines on the generated training fixture.",
+        "interpretation": "The scores demonstrate workflow execution only, not real-world performance.",
+        "limitation_unknown": "Business meaning and FP/FN costs are unspecified.",
+        "decision": "Retain the predeclared fixed-threshold development comparison as a software demonstration.",
+        "future_work": "Use a new independent run with a real task-specific plan."
+    }
     write_json(out / "narrative.json", narrative)
     manifest = generate(out / "development/training_results.json", out / "diagnosis.json", out / "narrative.json", out / "report")
     print(f"Synthetic demo complete: {out / 'report/report.pdf'}; {manifest['main_pages']} main pages")

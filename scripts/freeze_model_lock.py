@@ -11,9 +11,16 @@ def freeze(results, model_dir, review_path, output, require_human_approval=False
     r, review = read_json(results), read_json(review_path)
     verify_training(results)
     required = {"selected_variant", "preferred_model", "rationale", "sensitivity_review", "warnings_review"}
+    if r.get("schema_version", 2) >= 5:
+        required |= {"selection_rule", "tie_breaker"}
     if set(review) != required or any(not isinstance(v, str) or not v.strip() for v in review.values()):
         raise ValueError(f"Review must contain nonempty text fields: {sorted(required)}")
+    if review["selected_variant"] != "baseline":
+        raise ValueError("Sensitivity variants are interpretive and cannot be locked. To adopt one, create and "
+                         "validate a new independent plan/run with that configuration as its baseline.")
     selected = r["variants"][review["selected_variant"]]
+    if selected.get("selection_eligible", True) is not True:
+        raise ValueError("The selected development variant is not eligible for Model Lock")
     if review["preferred_model"] not in selected["models"]:
         raise ValueError("Preferred model is not in selected variant")
     if r["code_sha256"] != code_hashes() or r["environment"] != environment():

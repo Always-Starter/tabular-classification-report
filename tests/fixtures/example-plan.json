@@ -1,9 +1,19 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "target": "label",
   "task": "binary",
   "positive_class": "no",
-  "threshold": 0.5,
+  "threshold_policy": {
+    "mode": "fixed",
+    "value": 0.5,
+    "search_values": [],
+    "objective": null,
+    "procedure": null,
+    "value_source": "conventional_default",
+    "value_rationale": "A 0.5 probability cutoff is a transparent software-fixture baseline; it is not claimed to be operationally optimal.",
+    "not_tuned_reason": "The fixture tests fixed-threshold provenance; threshold tuning is exercised in a separate regression test.",
+    "selection_scope": "predeclared_before_development"
+  },
   "features": [
     "x1",
     "x2",
@@ -30,7 +40,15 @@
   "cv": {
     "strategy": "stratified",
     "outer_splits": 2,
-    "inner_splits": 2
+    "inner_splits": 2,
+    "rationale": "Two folds keep this synthetic contract test fast while preserving both classes in every fold.",
+    "status": "confirmed",
+    "selection_basis": "conventional_default"
+  },
+  "compute_budget": {
+    "max_explicit_fits": 1200,
+    "source": "conventional_default",
+    "rationale": "A generous ceiling prevents accidental expansion while allowing the small synthetic grids to complete."
   },
   "metrics": {
     "primary": "f1",
@@ -85,6 +103,12 @@
       "rationale": "Exercise a scaled linear probabilistic classifier.",
       "grid_rationale": "Two C values exercise bounded regularisation selection.",
       "stopping_rule": "Stop after the predefined inner-CV grid.",
+      "preprocessing_rationale": "Median imputation and indicators exercise missing-value handling; standard scaling is appropriate for the regularized linear estimator, and one-hot encoding avoids ordering nominal fixture levels.",
+      "imbalance_handling": {
+        "strategy": "none",
+        "basis": "dataset_specific_evidence",
+        "rationale": "The synthetic labels are not materially imbalanced, so this fixture does not add class weighting."
+      },
       "preprocessing": {
         "numeric_imputer": "median",
         "missing_indicator": true,
@@ -116,6 +140,12 @@
       "rationale": "Exercise an unscaled nonlinear tree classifier.",
       "grid_rationale": "Two leaf sizes exercise bounded complexity selection.",
       "stopping_rule": "Stop after the predefined inner-CV grid.",
+      "preprocessing_rationale": "Median imputation and indicators exercise missing-value handling; the tree does not require scaling, and one-hot encoding keeps nominal fixture levels unordered.",
+      "imbalance_handling": {
+        "strategy": "none",
+        "basis": "dataset_specific_evidence",
+        "rationale": "The synthetic labels are not materially imbalanced, so this fixture does not add class weighting."
+      },
       "preprocessing": {
         "numeric_imputer": "median",
         "missing_indicator": true,
@@ -127,12 +157,15 @@
     }
   ],
   "decision_trace": [
-    {
-      "observation": "Synthetic fixture contains two classes and mixed numeric/categorical predictors.",
-      "decision": "Use an interpretable linear-versus-tree comparison; label 'no' is the positive class solely to test class-order handling.",
-      "rationale": "Exercise generic binary mechanics with a non-last positive class; this is not a plan for course data.",
-      "human_review_point": "Replace all fixture choices using the real training diagnosis, including error costs and positive class."
-    }
+    {"topic": "target_semantics", "basis": "user_domain_constraint", "observation": "The synthetic fixture declares label as its software-test target.", "decision": "Treat label as binary and use no as the positive class only to test class ordering.", "rationale": "The fixture definition supplies this meaning; it is not inferred from a real dataset.", "human_review_point": "A real run must confirm target and positive-class meaning."},
+    {"topic": "feature_typing", "basis": "dataset_specific_evidence", "observation": "x1 and x2 have numeric storage; category contains nominal strings.", "decision": "Assign two numeric and one categorical feature.", "rationale": "The fixture generator establishes these synthetic types.", "human_review_point": "Numeric-looking categories in real data require semantic review."},
+    {"topic": "preprocessing", "basis": "dataset_specific_evidence", "observation": "The fixture has missing numeric and categorical values.", "decision": "Use fold-local imputation and encoding, with scaling only for the linear model.", "rationale": "This tests missing-data and model-specific scaling behavior.", "human_review_point": "Replace these choices using the actual missingness and distribution evidence."},
+    {"topic": "imbalance", "basis": "dataset_specific_evidence", "observation": "The fixture classes are not materially imbalanced.", "decision": "Use no class weighting or resampling.", "rationale": "Weighting is unnecessary for this mechanical test.", "human_review_point": "Real error costs and prevalence may justify another strategy."},
+    {"topic": "model_shortlist", "basis": "conventional_default", "observation": "The fixture needs complementary decision boundaries.", "decision": "Compare a linear classifier and a shallow tree.", "rationale": "Two fast families exercise the reusable pipeline without claiming exhaustive search.", "human_review_point": "Real candidates must follow the current diagnosis and compute budget."},
+    {"topic": "metric", "basis": "conventional_default", "observation": "The fixture intentionally uses a non-last positive class.", "decision": "Use binary F1 as the primary software-test metric.", "rationale": "This exercises positive-class handling; it is not an operational recommendation.", "human_review_point": "Real metric choice requires target meaning and FP/FN costs."},
+    {"topic": "cv", "basis": "conventional_default", "observation": "Rows are independently generated and both classes fit two-fold splits.", "decision": "Use 2x2 stratified nested CV.", "rationale": "It is fast and feasible for the fixture.", "human_review_point": "Grouped or temporal data require dependency-aware splitting."},
+    {"topic": "decision_rule", "basis": "conventional_default", "observation": "No operational error costs exist for the fixture.", "decision": "Predeclare a fixed 0.5 threshold.", "rationale": "It is a transparent baseline, not an optimized operating point.", "human_review_point": "Known costs may justify predeclared inner-CV tuning in a real run."},
+    {"topic": "compute_budget", "basis": "conventional_default", "observation": "The fixture grids are deliberately small.", "decision": "Cap explicit fits at 1200.", "rationale": "The ceiling prevents accidental expansion and does not prescribe a real-run budget.", "human_review_point": "Set a real budget from available compute and dataset size."}
   ],
   "sensitivities": []
 }

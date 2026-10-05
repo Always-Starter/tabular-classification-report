@@ -69,12 +69,14 @@ def evaluate(test, lock_path, model_dir, output_dir, sheet="Data"):
                   "missing_labels": int((~mask).sum()), "class_order": order,
                   "plan": plan, "models": {}, "created_at": utcnow()}
         for name, model in models.items():
-            pred, prob = predictions(model, x, order, plan)
+            selected_threshold = lock["models"][name].get("selected_threshold")
+            pred, prob = predictions(model, x, order, plan, selected_threshold)
             prediction_path = output_dir / f"{name}_predictions.json"
             write_json(prediction_path, {"class_order": order, "records": [
                 {"source_row": i, "actual": actual[i], "prediction": str(pred[i]), "probabilities": prob[i].tolist()}
                 for i in range(len(frame))]}, exclusive=True)
             scores = score_metrics(y, pred[mask], prob[mask], order, plan)
+            scores["selected_threshold"] = selected_threshold
             scores["predictions"] = {"path": prediction_path.name, "sha256": sha(prediction_path)}
             result["models"][name] = scores
         write_json(output_dir / "test_results.json", result, exclusive=True)

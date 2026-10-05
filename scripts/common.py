@@ -177,17 +177,48 @@ def pipeline(plan, spec):
     return Pipeline([("preprocess", prep), ("model", ESTIMATORS[spec["type"]](**defaults))])
 
 
-def predictions(model, x, order, plan):
+def threshold_policy(plan):
+    """Return the explicit policy, normalising legacy scalar thresholds without invented provenance."""
+    if plan["task"] != "binary":
+        return None
+    if "threshold_policy" in plan:
+        return plan["threshold_policy"]
+    return {
+        "mode": "fixed", "value": plan["threshold"], "search_values": [], "objective": None,
+        "procedure": None, "value_source": "unknown", "value_rationale": None,
+        "not_tuned_reason": "Legacy plan did not record why the threshold was not tuned.",
+        "selection_scope": "legacy_unknown",
+    }
+
+
+def ordered_probabilities(model, x, order):
     classes = list(model.classes_)
     if set(classes) != set(order):
         raise ValueError("Fitted model classes do not match frozen class order")
-    prob = model.predict_proba(x)[:, [classes.index(c) for c in order]]
+    return model.predict_proba(x)[:, [classes.index(c) for c in order]]
+
+
+def decisions_from_probabilities(prob, order, plan, selected_threshold=None):
+    prob = np.asarray(prob)
     if plan["task"] == "binary":
+        policy = threshold_policy(plan)
         pos = plan["positive_class"]
         neg = next(c for c in order if c != pos)
-        pred = np.where(prob[:, order.index(pos)] >= plan["threshold"], pos, neg)
+        if policy["mode"] == "model_default":
+            pred = np.asarray(order)[np.argmax(prob, axis=1)]
+        else:
+            value = policy["value"] if policy["mode"] == "fixed" else selected_threshold
+            if value is None:
+                raise ValueError("A tuned threshold must be selected within development before prediction")
+            pred = np.where(prob[:, order.index(pos)] >= value, pos, neg)
     else:
         pred = np.asarray(order)[np.argmax(prob, axis=1)]
+    return pred
+
+
+def predictions(model, x, order, plan, selected_threshold=None):
+    prob = ordered_probabilities(model, x, order)
+    pred = decisions_from_probabilities(prob, order, plan, selected_threshold)
     return pred, prob
 
 

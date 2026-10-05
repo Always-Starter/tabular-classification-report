@@ -1,74 +1,66 @@
-# Executable plan contract (schema v4)
+# Executable plan contract (schema v5)
 
-`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example. Schemas v2 and v3 remain readable for preserved runs; create new plans as v4.
+`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example, not a recommended real-data plan. Schemas v2-v4 remain readable for preserved runs; create new plans as v5. Legacy scalar thresholds are read with unknown provenance rather than receiving reconstructed explanations.
 
-Top-level fields:
+## Decision classes and top-level fields
+
+Schema v5 separates `invariant_methodological_rule`, `dataset_specific_evidence`, `user_domain_constraint`, `conventional_default`, and `unknown`. Every decision-trace record has a topic, one of those bases, and Observation / Decision / Rationale / Human-review point. Required topics cover target semantics, feature typing, preprocessing, imbalance, model shortlist, metric, CV, decision rule and compute budget.
 
 | Field | Contract |
 | --- | --- |
-| schema_version | 4 |
+| schema_version | 5 |
 | target, task | Column name; `binary` or `multiclass` |
-| features | Nonempty ordered predictor names; excludes target |
-| numeric_features, categorical_features | Disjoint lists exactly partitioning features |
-| excluded_features | Object mapping excluded column names to reasons; every training predictor must be selected or explicitly excluded, in every variant |
-| semantics | Structured target source/meaning, positive-class meaning, FP/FN costs and row-dependence status; use null/unknown rather than inference |
-| feature_provenance | Material feature provenance records: derivation, outcome-information use, prediction-time availability and confirmed/unknown status |
-| positive_class, threshold | Binary only: string class and fixed threshold in [0,1]; omit both for multiclass |
-| seed | Nonnegative integer |
-| cv | strategy, outer_splits and inner_splits (2–10); see below |
-| metrics | primary string; secondary list, rationale and confirmed/provisional status |
-| candidate_selection | Exact registry snapshot, selection basis, shortlist rationale and considered alternatives |
-| models | Two or three named model specifications in this implementation; two is the default, a third needs a documented training-data reason (not an explicit Variant 2 limit) |
-| model_count_rationale | Required nonempty string for every v3 plan. Explain why the selected count is sufficient, not a hoped-for score gain. |
-| decision_trace | Nonempty list of observation/decision/rationale/human_review_point strings |
-| sensitivities | Zero to three predeclared sensitivity specifications |
+| features and feature groups | Ordered predictors partitioned exactly into numeric/categorical lists |
+| excluded_features | Every unused predictor mapped to a reason |
+| semantics | Target source/meaning, positive-class meaning, FP/FN costs and row dependence; null/unknown stays unknown |
+| feature_provenance | Material derivation, outcome-information and prediction-time-availability records |
+| metrics | Predeclared primary, interpretive secondary metrics, rationale and confirmed/provisional status |
+| cv | Strategy/splits plus rationale, status and decision basis; grouped/time columns are excluded predictors |
+| compute_budget | Positive `max_explicit_fits`, source and rationale; internal SVM calibration is additional work |
+| candidate_selection | Exact registry snapshot, shortlist basis/rationale and considered alternatives |
+| models | Two or three bounded candidate specifications in this implementation |
+| sensitivities | Zero to three predeclared interpretive alternatives; never selection-eligible or lockable |
 
-## Metrics and class semantics
+## Binary decision-threshold policy
 
-All tasks: `accuracy`, `balanced_accuracy`, `f1_macro`, `f1_weighted`, `precision_macro`, `recall_macro`, `log_loss`.
-Binary adds `f1`, `precision`, `recall`, `roc_auc`, `average_precision`.
-Multiclass adds `roc_auc_ovr_macro`. Only log loss is minimized; all other supported metrics are maximized. Prediction uses the declared binary threshold or multiclass argmax. Training determines sorted class order, which is frozen before testing. Binary ranking metrics explicitly binarize against `positive_class`, independent of label sorting. Metrics requiring unavailable classes are null with a reason at holdout, not silently zero/NaN. Every training validation fold must contain all classes.
+Binary schema-v5 plans use `threshold_policy`; they do not use a scalar `threshold`. Multiclass plans use argmax and omit both threshold fields.
 
-For binary precision/recall/F1, use null with a reason when the actual denominator is zero: precision needs predicted positives, recall needs actual positives, F1 needs at least one actual or predicted positive. A mathematically defined zero remains zero (e.g. all predicted positives are false positives). Macro/weighted metrics average over frozen classes with per-class zero-division convention 0. If any outer fold has an undefined secondary metric, its mean/SD are null and fold-level reasons remain saved; the primary metric must be defined in every training scoring fold.
+- `fixed`: record a value in [0,1], its source, the exact-value rationale (or source `unknown` with null rationale), why it was not tuned, and `predeclared_before_development` timing. A conventional 0.5 value is allowed only as an explicitly labelled baseline, not an operational optimum.
+- `tuned`: value is null in the plan; declare 2-21 distinct search values, a threshold-dependent primary objective, `joint_inner_cv_grid`, `inner_cv` provenance and `inner_cv_only` scope. The runner jointly selects model parameters and threshold independently inside every outer fold, then again in the final full-training inner search. The selected value is frozen per final model.
+- `model_default`: record `estimator_default_class_decision`, model-default provenance, the rationale and why threshold tuning was not performed. The auditable implementation uses maximum frozen-class probability.
 
-## CV
+Held-out data never select or revise a threshold. A threshold sensitivity is a predeclared alternative configuration, not threshold optimization.
 
-- `stratified`: shuffled stratified folds with the saved seed.
-- `stratified_group`: also specify `group_column`; one entity stays in one fold.
-- `time`: also specify `time_column`; forward splits over sorted distinct timestamps; optional nonnegative `gap`. Equal timestamps cannot straddle a split.
+## Metrics, CV and feasibility
 
-Group/time columns must appear in `excluded_features`. Training checks fold feasibility before fitting; no silent fallback to shuffled CV.
+Supported metrics are `accuracy`, `balanced_accuracy`, `f1_macro`, `f1_weighted`, `precision_macro`, `recall_macro`, `log_loss`; binary also supports `f1`, `precision`, `recall`, `roc_auc`, `average_precision`; multiclass supports `roc_auc_ovr_macro`. Only log loss is minimized. A tuned threshold currently requires a threshold-dependent primary metric so one objective governs joint inner selection. Ranking/probability objectives can use a fixed or model-default class decision.
+
+CV strategies are shuffled stratified, stratified group and forward time. Split counts are 2-10 but are dataset decisions: training checks class support, groups and timestamp ordering before fitting, with no silent fallback. Group/time columns must be excluded predictors. Unknown row dependence must be reported as a limitation, not converted to independence.
+
+Binary denominator-zero precision/recall/F1 values are null with reasons. Macro/weighted metrics use frozen classes. Every training scoring fold must contain every class. Secondary summaries become null if any fold is undefined; the primary must be defined.
 
 ## Per-model specification
 
-Each object has `name` (lowercase safe filename), `type`, `params` (fixed estimator parameters), `fixed_param_rationale`, `grid` (list-valued `model__` parameters), `preprocessing`, `rationale`, `grid_rationale`, and `stopping_rule`. Types: `logistic_regression`, `random_forest`, `extra_trees`, `decision_tree`, `knn`, `gaussian_nb`, `support_vector_classifier`.
+Each model records name, registry type, fixed `params`, `fixed_param_rationale`, bounded estimator `grid`, preprocessing, `preprocessing_rationale`, `imbalance_handling`, family rationale, grid rationale and stopping rule. Registry types are logistic regression, random forest, extra trees, decision tree, KNN, Gaussian Naive Bayes and calibrated SVM.
 
-`fixed_param_rationale` must cover every `params` key exactly. Each record contains:
+For every fixed parameter, separately record why it was not tuned and where its exact value came from. Sources are training diagnosis, compute budget, convergence requirement, user/authoritative requirement, domain constraint, prior independent evidence, literature, heuristic, implementation constraint, predeclared rule, library default or unknown. Unknown requires a null exact-value rationale.
 
-- `not_tuned_reason`: why this parameter was excluded from the tuning grid;
-- `value_source`: one of `training_diagnosis`, `compute_budget`, `convergence_requirement`, `user_supplied`, `authoritative_requirement`, `prior_independent_evidence`, `implementation_constraint`, `predeclared_rule`, `library_default`, or `unknown`;
-- `value_rationale`: why this exact value was chosen rather than another value. It must be a nonempty string unless `value_source` is `unknown`; an unknown source requires JSON `null` so a rationale cannot be reconstructed after the fact.
+`imbalance_handling` explicitly declares `none`, `fixed_class_weight` or `tuned_class_weight`, its basis and rationale, and must agree with `class_weight` in params/grid. Resampling is not bundled; a dataset that needs it requires a leakage-safe tested extension. Metric selection must not be inferred from prevalence alone.
 
-These are two separate questions. A limited tuning budget can explain why `max_depth` was not tuned but does not explain why its fixed value is 12. Empty `params` therefore requires an empty rationale object; unspecified library defaults remain recorded in resolved training results rather than receiving invented plan rationales.
+Preprocessing supports per-model numeric imputation (median/mean/most-frequent/constant), optional missing indicators/log1p, none/standard/robust scaling, categorical imputation and one-hot/ordinal encoding. Learned preprocessing is always fitted inside folds. Numeric storage does not prove continuous semantics; the plan must preserve the feature-typing basis in its decision trace.
 
-Preprocessing requires:
+Only estimator parameters are in `grid`; preprocessing/feature/threshold alternatives use declared interpretive sensitivities. Up to 16 model candidates and, for tuned thresholds, 64 joint scored combinations are allowed per model. The plan declares the total explicit-fit ceiling. Dense encoding above the conservative memory estimate is refused. Calibrated SVM requires scaling and stratified CV; before fitting, every nested training subset is checked for sufficient per-class examples for the largest declared calibration fold count. Nonlinear candidates also have a pairwise-memory guard.
 
-- `numeric_imputer`: median / mean / most_frequent / constant; optional numeric_fill_value (default 0).
-- `missing_indicator`: boolean; `numeric_transform`: none / log1p.
-- `scaler`: none / standard / robust.
-- `categorical_imputer`: most_frequent / constant (`<MISSING>`).
-- `categorical_encoder`: onehot / ordinal. Onehot optionally accepts min_frequency and max_categories; unseen categories are ignored. Ordinal uses -1 for unseen categories.
+Sensitivity variants are labelled `interpretive_sensitivity` in results. They may describe robustness but may not select or replace the baseline, set a threshold, or enter Model Lock. A sensitivity worth adopting becomes a prespecified baseline in a new independent plan/run.
 
-Only estimator parameters are tuned in `grid`. Use a declared sensitivity for preprocessing/feature/threshold alternatives. Empty grid `{}` means one fixed candidate. Up to 16 candidates per model; default total budget 1200 fits including refits and sensitivities. Estimator seeds are controlled by the top-level seed; internal jobs are 1. Unspecified estimator defaults are resolved and saved in training results; package versions are recorded. This runner produces dense encoded features and rejects a conservative estimated matrix above 512 MiB; high-cardinality/sparse datasets may need an extension.
+## Search evidence and boundaries
 
-SVM requires standard or robust numeric scaling and currently supports only stratified CV because its three-fold probability calibration is not yet group/time-aware. The runner applies a conservative 2 GiB pairwise-kernel guard to nonlinear candidates. Calibration adds internal work beyond the explicit grid-fit count, so keep SVM grids especially small and document the compute trade-off.
+Every outer and final inner search saves all candidate scores, selected model parameters, selected threshold where applicable, split scores and final-refit evidence. Numeric boundaries record distinct value count, whether interior candidates existed, selected edge and whether an outside-range question is supported. A two-value endpoint means coarse coverage only. An edge after interior candidates supports a future independent question, not automatic expansion. Fold instability and inconsistent selected edges must be reported as uncertainty.
 
-Before fitting, justify the primary metric, candidate-set scope, each family, each grid, every fixed parameter and per-model preprocessing from the training diagnosis or another recorded source. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. Development results preserve candidate-level inner scores for each outer search and the final full-training search, plus final-refit evidence.
+Outer or held-out results do not authorize family, preprocessing, metric, threshold or grid changes within the locked claim. Such changes are a new independent development run.
 
-For numeric grids with at least two distinct values, results save `tuning_boundary` for outer-fold and final-inner endpoint choices. The metadata records the number of distinct values, whether interior candidates existed, a boundary type and whether the result supports an outside-range question. In a two-value grid, every selection is an endpoint: this is `two_value_grid_endpoint`, evidence of coarse coverage only, and never directional evidence that the optimum lies outside the range. `edge_with_interior_candidates` means at least one interior value was evaluated before an edge won; it supports an untested-direction question for a future independent run, not adaptive expansion or retuning of the current run.
+## Sensitivities and capability boundary
 
-## Sensitivities
+Sensitivity overrides may replace whole feature lists, exclusions, models, or the binary `threshold_policy`; they retain target, metrics, class semantics and CV. Every variant uses identical outer splits and is independently validated/refitted. Post-hoc held-out selection is forbidden.
 
-Each object contains `name`, `rationale`, `overrides`. Overrides may replace only `features`, `numeric_features`, `categorical_features`, `excluded_features`, `models`, or binary `threshold`. Overrides replace whole fields, not recursive fragments. Preserve model names/order, target, metrics and CV. Every variant is independently validated, evaluated on identical splits, fitted on full training and saved. Select one variant in the lock review; never silently promote a model based on test performance.
-
-The bundled implementation is single-target classification, not multilabel/regression. Custom methods require extending this contract and its tests before development; unknown fields and unsupported estimators fail rather than being ignored.
+The implementation is single-target classification, not multilabel/regression. It does not bundle automated feature engineering, resampling, sparse large-scale encoding, cost-curve optimization or scalable kernel approximation. Unsupported needs must be disclosed and extended with focused synthetic tests before development.

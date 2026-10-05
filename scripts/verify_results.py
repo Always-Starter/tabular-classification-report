@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 import numpy as np
-from common import read_json, score_metrics, sha, write_json
+from common import decisions_from_probabilities, read_json, score_metrics, sha, write_json
 
 
 def compare(saved, calculated):
@@ -19,7 +19,7 @@ def compare(saved, calculated):
         raise ValueError("Undefined metric explanations differ")
 
 
-def recompute(records, order, plan):
+def recompute(records, order, plan, selected_threshold=None):
     labelled = [r for r in records if r["actual"] is not None]
     y = np.asarray([r["actual"] for r in labelled])
     pred = np.asarray([r["prediction"] for r in labelled])
@@ -29,11 +29,8 @@ def recompute(records, order, plan):
         probabilities = np.asarray(row["probabilities"])
         if len(probabilities) != len(order) or not np.isfinite(probabilities).all() or not np.isclose(probabilities.sum(), 1):
             raise ValueError("Invalid saved probabilities")
-        if plan["task"] == "binary":
-            pos = plan["positive_class"]
-            expected = pos if probabilities[order.index(pos)] >= plan["threshold"] else next(c for c in order if c != pos)
-        else:
-            expected = order[int(np.argmax(probabilities))]
+        expected = decisions_from_probabilities(probabilities.reshape(1, -1), order, plan,
+                                                selected_threshold)[0]
         if row["prediction"] != expected:
             raise ValueError("Saved prediction does not follow frozen decision rule")
     return score_metrics(y, pred, prob, order, plan)
@@ -68,7 +65,9 @@ def verify(path, lock_path):
         records = predictions["records"]
         if predictions["class_order"] != r["class_order"] or [v["source_row"] for v in records] != list(range(r["test_rows"])):
             raise ValueError("Prediction order/count mismatch")
-        calculated = recompute(records, r["class_order"], r["plan"])
+        if saved.get("selected_threshold") != lock["models"][name].get("selected_threshold"):
+            raise ValueError("Held-out decision threshold differs from Model Lock")
+        calculated = recompute(records, r["class_order"], r["plan"], saved.get("selected_threshold"))
         compare(saved, calculated)
         if calculated["labelled_rows"] != r["labelled_rows"] or r["missing_labels"] + r["labelled_rows"] != r["test_rows"]:
             raise ValueError("Labelled/missing row counts do not reconcile")
@@ -99,10 +98,11 @@ def verify_training(path):
                 subset = [r for r in records if r["fold"] == fold["fold"]]
                 if [r["source_row"] for r in subset] != split["valid_source_rows"]:
                     raise ValueError("OOF rows do not match saved validation split")
-                compare(fold, recompute(subset, result["class_order"], variant["plan"]))
+                compare(fold, recompute(subset, result["class_order"], variant["plan"],
+                                        fold.get("selected_threshold")))
                 if variant["plan"].get("schema_version", 2) >= 3:
                     audit_search(fold.get("inner_search"), fold["best_params"],
-                                 variant["plan"]["metrics"]["primary"])
+                                 fold["inner_search"]["metric"], fold.get("selected_threshold"))
             for metric, summary in model["outer_summary"].items():
                 values = [f["metrics"][metric] for f in model["fold_results"]]
                 if values != summary["folds"] or summary["defined_folds"] != sum(v is not None for v in values):
@@ -115,10 +115,10 @@ def verify_training(path):
                     raise ValueError("Outer summary mismatch")
             if variant["plan"].get("schema_version", 2) >= 3:
                 audit_search(model.get("final_inner_search"), model["best_params"],
-                             variant["plan"]["metrics"]["primary"])
+                             model["final_inner_search"]["metric"], model.get("selected_threshold"))
                 refit = model.get("final_refit", {})
                 expected = {"fit_rows": result["eligible_rows"], "refit": True,
-                            "selection_metric": variant["plan"]["metrics"]["primary"],
+                            "selection_metric": model["final_inner_search"]["metric"],
                             "inner_splits": variant["plan"]["cv"]["inner_splits"],
                             "split_seed": variant["plan"]["seed"] + 99}
                 if refit != expected:
@@ -126,7 +126,7 @@ def verify_training(path):
     return {"verified": True, "training_results_sha256": sha(path)}
 
 
-def audit_search(evidence, selected, metric):
+def audit_search(evidence, selected, metric, selected_threshold=None):
     if not isinstance(evidence, dict) or evidence.get("metric") != metric:
         raise ValueError("Missing or invalid inner-CV evidence")
     candidates = evidence.get("candidates")
@@ -136,6 +136,10 @@ def audit_search(evidence, selected, metric):
     winner = candidates[index]
     if winner.get("params") != selected or winner.get("rank") != 1:
         raise ValueError("Inner-CV winner differs from selected parameters")
+    if evidence.get("selected_threshold") != selected_threshold:
+        raise ValueError("Inner-CV evidence differs from selected threshold")
+    if evidence.get("threshold_tuned") and winner.get("threshold") != selected_threshold:
+        raise ValueError("Inner-CV winner differs from selected threshold")
     if not np.isclose(winner.get("mean_score"), evidence.get("best_score")):
         raise ValueError("Inner-CV best score mismatch")
     if any(len(candidate.get("split_scores", [])) != evidence.get("inner_splits") for candidate in candidates):

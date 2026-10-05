@@ -44,6 +44,65 @@ def frame(n=120, multiclass=False):
 
 
 class Contracts(unittest.TestCase):
+    def test_schema_v5_policy_provenance_and_legacy_readability(self):
+        p = example()
+        self.assertEqual(validate(p)["threshold_policy"]["value_source"], "conventional_default")
+        self.assertEqual(p["cv"]["selection_basis"], "conventional_default")
+        self.assertEqual({item["basis"] for item in p["decision_trace"]},
+                         {"user_domain_constraint", "dataset_specific_evidence", "conventional_default"})
+        legacy = copy.deepcopy(p)
+        legacy["schema_version"] = 4
+        legacy["threshold"] = legacy.pop("threshold_policy")["value"]
+        legacy.pop("compute_budget")
+        for key in ("rationale", "status", "selection_basis"):
+            legacy["cv"].pop(key)
+        for item in legacy["decision_trace"]:
+            item.pop("topic"); item.pop("basis")
+        for spec in legacy["models"]:
+            spec.pop("preprocessing_rationale"); spec.pop("imbalance_handling")
+        self.assertEqual(validate(legacy)["threshold"], .5)
+
+    def test_threshold_policy_modes_and_imbalance_contract(self):
+        p = example()
+        p["threshold_policy"] = {"mode": "model_default", "value": None, "search_values": [],
+                                 "objective": None, "procedure": "estimator_default_class_decision",
+                                 "value_source": "model_default",
+                                 "value_rationale": "Use the estimator's declared class decision as a baseline.",
+                                 "not_tuned_reason": "Operational error costs are unknown.",
+                                 "selection_scope": "predeclared_before_development"}
+        validate(p)
+        weighted = example()
+        weighted["models"][0]["params"]["class_weight"] = "balanced"
+        weighted["models"][0]["fixed_param_rationale"]["class_weight"] = {
+            "not_tuned_reason": "A user constraint requires fixed inverse-frequency weighting.",
+            "value_source": "user_supplied",
+            "value_rationale": "The user explicitly requested the library's balanced weighting rule."
+        }
+        weighted["models"][0]["imbalance_handling"] = {
+            "strategy": "fixed_class_weight", "basis": "user_domain_constraint",
+            "rationale": "The user requested fixed class weighting."
+        }
+        validate(weighted)
+        weighted["models"][0]["imbalance_handling"]["strategy"] = "none"
+        with self.assertRaisesRegex(ValueError, "imbalance_handling"):
+            validate(weighted)
+
+    def test_heterogeneous_diagnosis_records_evidence_without_prescribing_models(self):
+        rng = np.random.default_rng(7)
+        d = pd.DataFrame({"symmetric": rng.normal(size=200), "skewed": rng.lognormal(size=200),
+                          "mostly_missing": np.where(np.arange(200) % 4, np.nan, rng.normal(size=200)),
+                          "cat_a": np.tile(["a", "b", "c", "d"], 50),
+                          "cat_b": np.tile(["u", "v"], 100),
+                          "label": np.where(np.arange(200) < 190, "major", "minor")})
+        result = diagnose(d, "label")
+        self.assertLess(abs(result["numeric"]["symmetric"]["distribution_evidence"]["skewness"]["value"]), 1)
+        self.assertTrue(result["numeric"]["skewed"]["distribution_evidence"]["skewness"]["material_flag"])
+        self.assertGreater(result["missing_predictors"]["mostly_missing"]["percent"], 70)
+        self.assertEqual(result["categorical"]["cat_a"]["cardinality_nonmissing"], 4)
+        self.assertFalse(result["feature_type_evidence"]["symmetric"]["semantic_type_confirmed"])
+        self.assertIn("do not establish", result["feature_type_evidence"]["symmetric"]["claim_limit"])
+        self.assertNotIn("recommended_model", result)
+
     def test_distribution_evidence_and_claim_guardrails(self):
         d = frame(200)
         d["spiky"] = np.concatenate([np.linspace(-1, 1, 199), [50]])
@@ -175,13 +234,17 @@ class Contracts(unittest.TestCase):
         p = example()
         y = np.tile(["no", "yes"], 60)
         d = frame(); d["entity"] = np.repeat(np.arange(30), 4)
-        p["cv"] = {"strategy": "stratified_group", "outer_splits": 3, "inner_splits": 2, "group_column": "entity"}
+        p["cv"] = {"strategy": "stratified_group", "outer_splits": 3, "inner_splits": 2,
+                   "group_column": "entity", "rationale": "Repeated synthetic entities require grouped splits.",
+                   "status": "confirmed", "selection_basis": "dataset_specific_evidence"}
         p["excluded_features"] = {"entity": "Repeated entity; group validation"}
         validate(p)
         for a, b in splits(d, y, p, 3, 1):
             self.assertFalse(set(d.iloc[a].entity) & set(d.iloc[b].entity))
         d["time"] = np.repeat(pd.date_range("2020-01-01", periods=30), 4)
-        p["cv"] = {"strategy": "time", "outer_splits": 3, "inner_splits": 2, "time_column": "time", "gap": 1}
+        p["cv"] = {"strategy": "time", "outer_splits": 3, "inner_splits": 2, "time_column": "time", "gap": 1,
+                   "rationale": "Synthetic timestamps require forward validation.", "status": "confirmed",
+                   "selection_basis": "dataset_specific_evidence"}
         p["excluded_features"] = {"time": "Forward-only evaluation"}
         validate(p)
         for a, b in splits(d, y, p, 3, 1):
@@ -208,13 +271,18 @@ class Workflow(unittest.TestCase):
         cls.train = cls.base / "training.csv"
         frame().to_csv(cls.train, index=False)
         cls.plan = example()
-        cls.plan["sensitivities"] = [{"name": "threshold_check", "rationale": "Predeclared operating-point uncertainty", "overrides": {"threshold": .65}}]
+        threshold_check = copy.deepcopy(cls.plan["threshold_policy"])
+        threshold_check.update(value=.65, value_rationale="A predeclared fixed alternative used only as sensitivity evidence.")
+        cls.plan["sensitivities"] = [{"name": "threshold_check", "rationale": "Predeclared operating-point uncertainty",
+                                      "overrides": {"threshold_policy": threshold_check}}]
         cls.plan_path = cls.base / "plan.json"
         write_json(cls.plan_path, cls.plan)
         cls.development = cls.base / "development"
         cls.results = run(cls.train, cls.plan_path, cls.development)
         cls.review = cls.base / "review.json"
         write_json(cls.review, {"selected_variant": "baseline", "preferred_model": "linear", "rationale": "Synthetic comparison for software testing only",
+                               "selection_rule": "Use the fixture's primary outer-CV comparison, then plan order only if needed.",
+                               "tie_breaker": "No substantive tie-breaker claim is made for the software fixture.",
                                "sensitivity_review": "Keep baseline; threshold alternative is a software fixture", "warnings_review": "Reviewed synthetic run warnings"})
 
     @classmethod
@@ -243,6 +311,9 @@ class Workflow(unittest.TestCase):
     def test_nested_evidence_and_sensitivity(self):
         self.assertTrue(verify_training(self.development / "training_results.json")["verified"])
         self.assertEqual(set(self.results["variants"]), {"baseline", "threshold_check"})
+        self.assertTrue(self.results["variants"]["baseline"]["selection_eligible"])
+        self.assertEqual(self.results["variants"]["threshold_check"]["role"], "interpretive_sensitivity")
+        self.assertFalse(self.results["variants"]["threshold_check"]["selection_eligible"])
         self.assertFalse(self.results["test_data_accessed"])
         for v in self.results["variants"].values():
             for model in v["models"].values():
@@ -266,6 +337,38 @@ class Workflow(unittest.TestCase):
         m = joblib.load(self.development / "baseline/linear.joblib")
         learned = m.named_steps["preprocess"].named_transformers_["numeric"].named_steps["imputer"].statistics_
         self.assertTrue(np.allclose(learned, frame()[["x1", "x2"]].median().to_numpy()))
+
+    def test_sensitivity_variant_cannot_be_locked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            review = Path(tmp) / "review.json"
+            payload = read_json(self.review)
+            payload["selected_variant"] = "threshold_check"
+            write_json(review, payload)
+            with self.assertRaisesRegex(ValueError, "interpretive and cannot be locked"):
+                freeze(self.development / "training_results.json", self.development, review,
+                       Path(tmp) / "model-lock.json")
+
+    def test_svm_calibration_feasibility_fails_before_any_fit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            p = example()
+            svm = p["models"][0]
+            svm["type"] = "support_vector_classifier"
+            svm["params"] = {"calibration_cv": 3}
+            svm["fixed_param_rationale"] = {
+                "calibration_cv": {
+                    "not_tuned_reason": "This test predeclares the calibration fold count.",
+                    "value_source": "predeclared_rule",
+                    "value_rationale": "Three folds exercise the pre-fit feasibility guard."
+                }
+            }
+            d = frame(26)
+            d["label"] = ["no"] * 20 + ["yes"] * 6
+            d.to_csv(tmp / "train.csv", index=False)
+            write_json(tmp / "plan.json", p)
+            with patch.object(SimpleImputer, "fit", side_effect=AssertionError("Must fail before fitting")):
+                with self.assertRaisesRegex(ValueError, "SVM calibration is infeasible before fitting"):
+                    run(tmp / "train.csv", tmp / "plan.json", tmp / "development")
 
     def test_fold_local_imputer_fits_and_missing_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -292,6 +395,33 @@ class Workflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(SimpleImputer, "fit", side_effect=AssertionError("Must not fit")):
             with self.assertRaisesRegex(ValueError, "exceed budget"):
                 run(self.train, self.plan_path, Path(tmp) / "out", max_fits=1)
+
+    def test_tuned_threshold_is_selected_only_inside_each_inner_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            p = example()
+            p["sensitivities"] = []
+            p["threshold_policy"] = {"mode": "tuned", "value": None, "search_values": [.35, .5, .65],
+                                     "objective": "f1", "procedure": "joint_inner_cv_grid",
+                                     "value_source": "inner_cv",
+                                     "value_rationale": "Select the tested operating point within each inner CV search.",
+                                     "not_tuned_reason": None, "selection_scope": "inner_cv_only"}
+            for spec in p["models"]:
+                spec["grid"] = {}
+            train = tmp / "train.csv"
+            frame().to_csv(train, index=False)
+            write_json(tmp / "plan.json", p)
+            result = run(train, tmp / "plan.json", tmp / "dev")
+            self.assertTrue(verify_training(tmp / "dev/training_results.json")["verified"])
+            for model in result["variants"]["baseline"]["models"].values():
+                self.assertIn(model["selected_threshold"], [.35, .5, .65])
+                self.assertTrue(model["final_inner_search"]["threshold_tuned"])
+                self.assertEqual(len(model["final_inner_search"]["candidates"]), 3)
+                for fold in model["fold_results"]:
+                    self.assertIn(fold["selected_threshold"], [.35, .5, .65])
+                    self.assertTrue(fold["inner_search"]["threshold_tuned"])
+            audited = audit(tmp / "dev/training_results.json")
+            self.assertEqual(audited["threshold_policy"]["selection_scope"], "inner_cv_only")
 
     def test_every_predictor_needs_a_selection_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -330,7 +460,7 @@ class Workflow(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 approve(lock, "0" * 64, "reviewer", "approved")
             self.approve_fixture(lock)
-            payload = read_json(lock); payload["plan"]["threshold"] = .9; write_json(lock, payload)
+            payload = read_json(lock); payload["plan"]["threshold_policy"]["value"] = .9; write_json(lock, payload)
             with self.assertRaisesRegex(ValueError, "seal/digest"):
                 evaluate(Path(tmp) / "absent.csv", lock, self.development, Path(tmp) / "out")
 
@@ -346,7 +476,7 @@ class Workflow(unittest.TestCase):
             self.assertTrue(verify(tmp / "out/test_results.json", lock)["verified"])
         with tempfile.TemporaryDirectory() as tmp:
             lock = self.new_lock(tmp)
-            payload = read_json(lock); payload["plan"]["threshold"] = .9; write_json(lock, payload)
+            payload = read_json(lock); payload["plan"]["threshold_policy"]["value"] = .9; write_json(lock, payload)
             with patch("evaluate_holdout.load_table", side_effect=AssertionError("Must not read")), self.assertRaisesRegex(ValueError, "seal/digest"):
                 evaluate(Path(tmp) / "absent.csv", lock, self.development, Path(tmp) / "out")
 
@@ -413,6 +543,10 @@ class Workflow(unittest.TestCase):
             self.assertIn("## Trustworthiness", report)
             self.assertIn("endpoint of a two-value grid", report)
             self.assertIn("Fixed-parameter rationale", report)
+            self.assertIn("FACT:", report)
+            self.assertIn("LIMITATION/UNKNOWN:", report)
+            self.assertIn("FUTURE WORK:", report)
+            self.assertIn("Fixed threshold 0.5 was predeclared", report)
             self.assertIn("| Name | Example Student |", report)
             self.assertIn("| Matriculation number | A1234567X |", report)
             self.assertIn("| Skill repository | [https://example.com/example-skill](https://example.com/example-skill) |", report)
@@ -470,7 +604,7 @@ class Workflow(unittest.TestCase):
     def test_multiclass_full_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp); p = example(); p["task"] = "multiclass"
-            del p["positive_class"], p["threshold"]
+            del p["positive_class"], p["threshold_policy"]
             p["metrics"] = {"primary": "f1_macro", "secondary": ["accuracy", "log_loss", "roc_auc_ovr_macro"],
                             "rationale": "Exercise multiclass metrics in the synthetic workflow.", "status": "confirmed"}
             p["semantics"]["positive_class_meaning"] = None
@@ -520,6 +654,8 @@ class Workflow(unittest.TestCase):
             review = tmp / "review.json"
             write_json(review, {"selected_variant": "baseline", "preferred_model": "linear",
                                 "rationale": "Synthetic test", "sensitivity_review": "None declared",
+                                "selection_rule": "Use the prespecified primary outer-CV comparison.",
+                                "tie_breaker": "No tie-breaker was needed in this software test.",
                                 "warnings_review": "Reviewed synthetic warnings"})
             lock = tmp / "model-lock.json"
             freeze(tmp / "dev/training_results.json", tmp / "dev", review, lock)

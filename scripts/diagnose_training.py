@@ -123,6 +123,7 @@ def diagnose(frame, target):
             "duplicate_predictor_rows": int(predictors.duplicated().sum()),
         },
         "identifier_candidates": [],
+        "feature_type_evidence": {},
         "numeric": {},
         "categorical": {},
         "univariate_associations": {},
@@ -138,6 +139,15 @@ def diagnose(frame, target):
         nonmissing = int(series.notna().sum())
         unique = int(series.nunique(dropna=True))
         uniqueness = unique / nonmissing if nonmissing else 0
+        numeric_storage = bool(pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series))
+        result["feature_type_evidence"][str(column)] = {
+            "storage_dtype": str(series.dtype),
+            "numeric_storage": numeric_storage,
+            "distinct_nonmissing": unique,
+            "low_cardinality_numeric_flag": bool(numeric_storage and unique <= 20),
+            "semantic_type_confirmed": False,
+            "claim_limit": "Storage dtype and cardinality inform planning but do not establish semantic feature type."
+        }
         name_signal = bool(re.search(r"(^|_)(id|uuid|key|number|account)($|_)", str(column).lower()))
         if uniqueness >= 0.98 or name_signal:
             result["identifier_candidates"].append({

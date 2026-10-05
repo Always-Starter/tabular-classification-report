@@ -12,6 +12,13 @@
   "model_rationale": "Explain why each classifier was a suitable candidate, its expected strength and limitation, and the bounded search and explicit stopping rule.",
   "findings": "Interpret verified validation/test results without changing model decisions. Distinguish numerical ranking from meaningful superiority; discuss fold variability and generalization.",
   "limitations": "State unknown domain meaning/error costs, remaining provenance concerns and validation limitations.",
+  "evidence_summary": {
+    "fact": "Replace with a saved fact.",
+    "interpretation": "Replace with supported interpretation.",
+    "limitation_unknown": "Replace with material unknowns.",
+    "decision": "Replace with decision and basis.",
+    "future_work": "Replace with independent future work."
+  },
   "reflection": {
     "human_oversight": "Pending: student should describe decisions they actually reviewed, during or after the run, without inventing approval pauses.",
     "challenged_decision": "Pending: identify a real decision challenged and explain agreement/disagreement.",

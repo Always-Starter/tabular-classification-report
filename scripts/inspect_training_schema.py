@@ -5,13 +5,15 @@ import hashlib
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from common import load_table
 
 TARGET_NAMES = {"label", "target", "class", "outcome", "response", "dependent_variable"}
 
 
 def target_candidates(frame):
-    """Return training-only candidates; values establish suitability, not meaning."""
+    """Rank training-only candidates; the heuristic predicts a column, not its meaning."""
     candidates = []
     for column in frame.columns:
         values = frame[column].dropna()
@@ -23,9 +25,28 @@ def target_candidates(frame):
         name_evidence = ("conventional_target_name" if normalized in TARGET_NAMES else
                          "target_like_suffix" if normalized.endswith(("_label", "_target")) else
                          "none")
+        completeness = float(len(values) / len(frame))
+        nonnumeric = not pd.api.types.is_numeric_dtype(frame[column])
+        score = ({"conventional_target_name": 8, "target_like_suffix": 5, "none": 0}[name_evidence]
+                 + (2 if distinct == 2 else 1 if distinct <= 5 else 0)
+                 + (1 if nonnumeric else 0)
+                 + (1 if completeness == 1 else 0))
+        reasons = []
+        if name_evidence != "none":
+            reasons.append(name_evidence)
+        reasons.append("binary_cardinality" if distinct == 2 else "low_class_cardinality")
+        if nonnumeric:
+            reasons.append("categorical_storage")
+        if completeness == 1:
+            reasons.append("no_missing_candidate_labels")
         candidates.append({"column": str(column), "distinct_nonmissing_values": distinct,
-                           "nonmissing_rows": len(values), "name_evidence": name_evidence})
-    return candidates
+                           "nonmissing_rows": len(values), "name_evidence": name_evidence,
+                           "completeness": completeness, "storage_evidence":
+                           "categorical_or_text" if nonnumeric else "numeric",
+                           "inference_score": score, "inference_reasons": reasons})
+    return sorted(candidates, key=lambda item: (-item["inference_score"],
+                                                 item["distinct_nonmissing_values"],
+                                                 -item["completeness"], item["column"]))
 
 
 def inspect_schema(train, sheet="Data", target=None):
@@ -36,8 +57,11 @@ def inspect_schema(train, sheet="Data", target=None):
     if target is not None and target not in frame.columns:
         raise ValueError(f"Specified target {target!r} is absent. Available columns: {columns}")
     candidates = target_candidates(frame) if target is None else []
-    strong = [item for item in candidates if item["name_evidence"] == "conventional_target_name"]
-    suggested = strong[0]["column"] if len(strong) == 1 else None
+    selected = candidates[0] if candidates else None
+    suggested = selected["column"] if selected else None
+    tied = ([item["column"] for item in candidates
+             if item["inference_score"] == selected["inference_score"]]
+            if selected else [])
     return {
         "training_source": {"path": str(train.resolve()), "sheet": sheet,
                             "sha256": hashlib.sha256(raw).hexdigest()},
@@ -47,13 +71,24 @@ def inspect_schema(train, sheet="Data", target=None):
         "dtypes": {str(column): str(frame[column].dtype) for column in frame.columns},
         "target": target if target is not None else suggested,
         "target_resolution": ("explicitly_supplied" if target is not None else
-                              "provisionally_inferred" if suggested is not None else "unresolved"),
+                              "ai_inferred" if suggested is not None else "unresolved"),
         "target_candidates": candidates,
-        "target_inference_note": ("Training-only naming and cardinality evidence suggests a possible "
-                                  "classification target; this does not establish task semantics."
+        "target_inference": (None if target is not None or selected is None else {
+            "method": "training_only_ranked_heuristic",
+            "selected_column": suggested,
+            "selected_score": selected["inference_score"],
+            "selected_reasons": selected["inference_reasons"],
+            "equally_scored_candidates": tied,
+            "tie_breaker": ("lower class cardinality, then greater completeness, then lexical column name"
+                            if len(tied) > 1 else None),
+            "semantics_confirmed": False,
+        }),
+        "target_inference_note": ("The AI selected the highest-ranked classification-compatible column "
+                                  "using the recorded training-only heuristic. This is a reproducible guess, "
+                                  "not confirmation of task or label semantics."
                                   if suggested is not None else
-                                  "No unique conventional, classification-compatible target name; "
-                                  "ask the user to identify the target." if target is None else None),
+                                  "No classification-compatible target candidate was found; ask the user "
+                                  "or obtain authoritative metadata." if target is None else None),
     }
 
 

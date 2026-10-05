@@ -4,7 +4,7 @@ import argparse
 import re
 from pathlib import Path
 from xml.sax.saxutils import escape
-from common import code_hashes, read_json, sha, write_json
+from common import code_hashes, read_json, sha, threshold_policy, write_json
 from verify_results import verify, verify_training
 
 
@@ -87,6 +87,24 @@ def tuning_boundary_text(boundary, grid):
             parts.append(f"{label}={selected} selected the {edge} edge after interior candidates were evaluated; "
                          "this supports an untested-direction question only for a future independent run")
     return ". ".join(parts)
+
+
+def threshold_policy_text(plan, models):
+    policy = threshold_policy(plan)
+    if not policy:
+        return "Multiclass prediction uses maximum predicted probability (argmax)."
+    if policy["mode"] == "fixed":
+        source = policy["value_source"].replace("_", " ")
+        rationale = policy["value_rationale"] or "exact-value rationale unknown"
+        return (f"Fixed threshold {policy['value']} was predeclared before development; source: {source}; "
+                f"rationale: {rationale}; not tuned: {policy['not_tuned_reason']}")
+    if policy["mode"] == "model_default":
+        return ("The predeclared model-default class decision was retained rather than threshold-tuned; "
+                f"{policy['not_tuned_reason']}")
+    selected = ", ".join(f"{name}: {details.get('selected_threshold')}" for name, details in models.items())
+    return (f"Thresholds were jointly selected with model parameters inside inner CV only using "
+            f"{policy['objective'].replace('_', ' ')}; final full-training selections: {selected}. "
+            "Held-out data did not select or revise them")
 
 
 def confusion_text(matrix, classes, positive_class=None):
@@ -173,6 +191,9 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         test = read_json(test_results)
     else:
         verification, test, renderer_changed = None, None, False
+    if variant != "baseline" and tr["variants"][variant].get("selection_eligible") is False:
+        raise ValueError("Sensitivity variants are interpretive only and cannot be selected for a report. "
+                         "Adopt the configuration through a new independent baseline run.")
     vr = tr["variants"][variant]
     p = vr["plan"]
     text_keys = ("exploration", "preprocessing", "features", "model_rationale", "findings", "limitations")
@@ -189,6 +210,12 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         raise ValueError("Reflection needs oversight, challenge, manual verification and future changes; use explicit pending notes when unknown")
     if type(n.get("human_reflection_confirmed")) is not bool:
         raise ValueError("Declare human_reflection_confirmed true/false; never invent human verification")
+    evidence_keys = ("fact", "interpretation", "limitation_unknown", "decision", "future_work")
+    evidence_summary = n.get("evidence_summary")
+    if p.get("schema_version", 2) >= 5:
+        if not isinstance(evidence_summary, dict) or set(evidence_summary) != set(evidence_keys) or any(
+                not isinstance(evidence_summary[key], str) or not evidence_summary[key].strip() for key in evidence_keys):
+            raise ValueError("Schema-v5 reports require fact/interpretation/limitation_unknown/decision/future_work evidence_summary")
     draft = bool(missing) or not n["human_reflection_confirmed"]
     metric = p["metrics"]["primary"]
     model_labels = {spec["name"]: model_label(spec) for spec in p["models"]}
@@ -242,6 +269,8 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         model = vr["models"][spec["name"]]
         boundary = model.get("tuning_boundary", {})
         add(0, f"Model: {model_labels[spec['name']]}", "Preparation: " + preprocessing_text(spec["preprocessing"])
+            + (f". Imbalance handling: {spec['imbalance_handling']['strategy'].replace('_', ' ')} "
+               f"({spec['imbalance_handling']['basis'].replace('_', ' ')})" if spec.get("imbalance_handling") else "")
             + ". Selected settings: " + settings_text(model["best_params"])
             + ". Fixed settings: " + settings_text(spec["params"]) + ". "
             + fixed_param_rationale_text(spec) + "."
@@ -249,16 +278,18 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                if boundary else ""))
     add(0, "Model choice and stopping rules", n["model_rationale"]
         + f" The declared search used {tr['planned_fits']} planned fits across baseline and sensitivity analyses; "
-        + "outer folds did not trigger grid expansion or a change of primary metric.")
+        + "outer folds did not trigger grid expansion or a change of primary metric. Sensitivity variants were "
+        + "interpreted as robustness evidence only and were not eligible for selection or locking.")
     add(1, "Evaluation and comparison", f"Primary metric: {metric.replace('_', ' ')} "
         f"({'lower' if metric == 'log_loss' else 'higher'} is better). "
         f"Nested CV: {p['cv']['strategy']}, {p['cv']['outer_splits']} outer / {p['cv']['inner_splits']} inner folds; seed {p['seed']}. "
         "All learned preprocessing is fitted within folds. All classifiers share validation splits. "
-        + (f"Binary positive class: {p['positive_class']}; threshold: {p['threshold']}. " if p["task"] == "binary" else "Multiclass prediction uses argmax. ")
+        + (f"Binary positive class: {p['positive_class']}. " if p["task"] == "binary" else "")
+        + threshold_policy_text(p, vr["models"]) + ". "
         + (f"Held-out evaluation: {test['test_rows']:,} rows, {test['labelled_rows']:,} labelled, {test['missing_labels']} unlabelled. "
            if test else "No held-out evaluation performed; these are development estimates. ")
-        + "Fold SD measures variability, not a confidence interval. Repeatedly comparing development variants and "
-        + "retaining the best-performing one can introduce selection optimism, even when the held-out set remains untouched.")
+        + "Fold SD measures variability, not a confidence interval. The baseline alone was selection-eligible; "
+        + "adopting a sensitivity would require a new independent plan/run.")
     # The printed metric set is fixed by the pre-test plan order, never selected from
     # held-out performance. Full scores for every declared metric remain in evidence JSON.
     displayed_metrics = [metric, *p["metrics"]["secondary"][:3]]
@@ -309,8 +340,16 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                     confusion_text(model["confusion_matrix"], test["class_order"], p.get("positive_class"))
                     + (" Undefined metrics: " + settings_text(model["undefined_metrics"]) + "."
                        if model["undefined_metrics"] else ""))
-    add(1, "Findings and discussion", n["findings"])
-    add(1, "Limitations", n["limitations"] + f" Selected development variant: {variant}.")
+    if evidence_summary:
+        add(1, "Findings and discussion", "FACT: " + evidence_summary["fact"]
+            + " INTERPRETATION: " + evidence_summary["interpretation"]
+            + " DECISION: " + evidence_summary["decision"])
+        add(1, "Limitations", "LIMITATION/UNKNOWN: " + evidence_summary["limitation_unknown"]
+            + " FUTURE WORK: " + evidence_summary["future_work"]
+            + f" Selection-eligible development baseline: {variant}.")
+    else:
+        add(1, "Findings and discussion", n["findings"])
+        add(1, "Limitations", n["limitations"] + f" Selection-eligible development baseline: {variant}.")
     add(2, "Reflection - outside the two-page report limit", "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection")
     reflection_titles = {
         "human_oversight": "Human in the Loop",
@@ -342,13 +381,19 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         bold_name = "ReportFontBold"
     ink = colors.HexColor("#213446")
     blue = colors.HexColor("#173d5b")
-    style = ParagraphStyle("body", fontName="ReportFont", fontSize=10.1, leading=14.5,
+    three_model_layout = len(p["models"]) == 3
+    style = ParagraphStyle("body", fontName="ReportFont",
+                           fontSize=9.35 if three_model_layout else 10.1,
+                           leading=13.0 if three_model_layout else 14.5,
                            spaceAfter=7, textColor=ink)
-    page_one_body = ParagraphStyle("page-one-body", parent=style, fontSize=10.0, leading=14.0,
-                                   spaceAfter=6)
+    page_one_body = ParagraphStyle("page-one-body", parent=style,
+                                   fontSize=9.0 if three_model_layout else 10.0,
+                                   leading=12.2 if three_model_layout else 14.0,
+                                   spaceAfter=5 if three_model_layout else 6)
     heading = ParagraphStyle("heading", parent=style, fontName=bold_name, fontSize=11.5, leading=15,
                              spaceBefore=11, spaceAfter=4, textColor=blue)
-    page_one_heading = ParagraphStyle("page-one-heading", parent=heading, spaceBefore=9)
+    page_one_heading = ParagraphStyle("page-one-heading", parent=heading,
+                                      spaceBefore=7 if three_model_layout else 9)
     title_style = ParagraphStyle("title", parent=heading, fontSize=18, leading=22,
                                  spaceBefore=0, spaceAfter=2, textColor=blue)
     eyebrow = ParagraphStyle("eyebrow", parent=style, fontSize=9.1, leading=12,
@@ -361,7 +406,9 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                      spaceAfter=5)
     reflection_heading = ParagraphStyle("reflection-heading", parent=heading, fontSize=11.2, leading=14,
                                         spaceBefore=8, spaceAfter=3)
-    compact = ParagraphStyle("compact", parent=style, fontSize=9.4, leading=12.5, spaceAfter=0)
+    compact = ParagraphStyle("compact", parent=style,
+                             fontSize=8.8 if three_model_layout else 9.4,
+                             leading=11.7 if three_model_layout else 12.5, spaceAfter=0)
     table_header = ParagraphStyle("table-header", parent=compact, fontName=bold_name,
                                   textColor=blue)
     table_primary = ParagraphStyle("table-primary", parent=compact, fontName=bold_name,

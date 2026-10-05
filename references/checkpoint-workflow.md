@@ -10,7 +10,7 @@ This prerequisite occurs before Checkpoint 1; it is not an additional checkpoint
 
 `python scripts/inspect_training_schema.py --train /data/train.csv --output /runs/run1/schema.json`
 
-If the user or authoritative assignment/task/dataset metadata explicitly supplies `label`, add `--target label` to validate it. An absent specified column stops the workflow; do not silently substitute another. Without a supplied target, inspect the training-only `target_candidates` and `target_resolution`. A unique conventional target name with 2–20 nonmissing classes and adequate examples may yield `provisionally_inferred`: explain why it is merely a possible label, record its source and alternatives, and proceed using that name only when task context does not contradict it. Mark target confirmation pending in the report. If `unresolved`, show candidates and ask for the target before supervised diagnosis. Neither name nor class count alone proves task semantics; never choose solely by column order, filename, association or prior examples. Do not inspect any held-out file to resolve the target.
+If the user explicitly supplies `label`, add `--target label`; this overrides authoritative metadata. Otherwise use authoritative assignment/task/dataset metadata when available. An absent specified column stops the workflow; do not silently substitute another. Without either source, inspect the training-only `target_candidates`, `target_inference` and `target_resolution`. For `ai_inferred`, explain the selected column's score components, show the ranked alternatives and tie-breaker, record its source, and proceed unless visible task context contradicts it. Mark semantics confirmation pending in the report. If `unresolved`, no classification-compatible candidate exists, so ask for the target before supervised diagnosis. The heuristic combines naming, classification-compatible cardinality, storage and completeness; it predicts a column but does not prove its meaning. Never choose solely by column order, filename, association or prior examples. Do not inspect any held-out file to resolve the target.
 
 ## 1. Training diagnosis
 
@@ -26,20 +26,22 @@ Use `tests/fixtures/example-plan.json` as a schema example, not as a default exp
 
 `python scripts/validate_plan.py /runs/run1/plan.json`
 
-Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. For every fixed estimator parameter, record both why it was not tuned and the source/rationale for its exact value; use an explicit unknown source when unavailable. The plan proposes candidates, not a proven winner. Validation does not fit models. In explicitly requested staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. Otherwise, document the plan and proceed within its declared limits.
+Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; class-weight decision; primary/secondary metric roles; optional feature handling; dependency-aware splits; threshold policy; compute budget; bounded tuning and stopping; and any material sensitivity rationale. For every fixed estimator parameter, record both why it was not tuned and the source/rationale for its exact value; use an explicit unknown source when unavailable. Classify decision bases using the schema-v5 categories. The plan proposes candidates, not a proven winner. Validation does not fit models. In explicitly requested staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. Otherwise, document the plan and proceed within its declared limits.
 
 ## 3. Development and optional Model Lock
 
 `python scripts/run_nested_cv.py --train /data/train.csv --plan /runs/run1/plan.json --output-dir /runs/run1/development`
 
-The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Inner CV selects hyperparameters; outer CV evaluates the tuned procedure. Review `training_results.json`, fold variability, near-ties, numeric-grid boundary metadata, warnings and any sensitivities. A two-value endpoint indicates coarse coverage only because either choice must be an endpoint. An edge selected after interior candidates were evaluated supports a future independent untested-direction question, not automatic widening of the current run. Do not treat a tiny score difference as proof of superiority. If an independent holdout exists, write `review.json`:
+The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Before fitting, SVM plans are checked against every outer-inner, outer-refit, final-inner and full-refit training subset for calibration class-count feasibility. Inner CV selects hyperparameters and, only for a declared tuned policy, the threshold; outer CV evaluates that complete selection procedure. Review `training_results.json`, per-fold/final threshold evidence, fold variability, near-ties, numeric-grid boundary metadata, warnings and any sensitivities. Sensitivity variants are labelled `interpretive_sensitivity` and cannot be selected or locked; if one motivates a change, create a new independent plan/run with that configuration as the baseline. A two-value endpoint indicates coarse coverage only because either choice must be an endpoint. An edge selected after interior candidates were evaluated supports a future independent untested-direction question, not automatic widening of the current run. Do not treat a tiny score difference as proof of superiority. If an independent holdout exists, write `review.json` with `selected_variant` fixed to `baseline`:
 
 ```json
 {
   "selected_variant": "baseline",
   "preferred_model": "linear",
   "rationale": "Replace with evidence from the actual train-only comparison.",
-  "sensitivity_review": "Explain each declared sensitivity and the selected configuration; state why none was needed if applicable.",
+  "selection_rule": "Apply the predeclared primary-metric comparison on shared outer folds, then the declared non-score considerations.",
+  "tie_breaker": "State the actually applied interpretability/stability/compute tie-breaker, or that no tie-breaker was needed.",
+  "sensitivity_review": "Interpret each declared sensitivity without selecting it; state whether it motivates a future independent run.",
   "warnings_review": "Explain any recorded warning or state that none occurred."
 }
 ```

@@ -1,6 +1,6 @@
 # Model Lock and test-access boundary
 
-The lock contains the selected complete plan, every trained artifact and hash, training-derived class order, full estimator parameters, preprocessing, features/exclusions, metrics, threshold, seed/CV, sensitivity review, training-data/result hashes, exact Python/package versions and script hashes.
+The lock always contains the baseline plan, every baseline artifact and hash, training-derived class order, full estimator parameters, preprocessing, features/exclusions, metrics, threshold policy and final per-model selected threshold where applicable, seed/CV, interpretive sensitivity review, training-data/result hashes, exact Python/package versions and script hashes. Sensitivity variants cannot be locked; adopting one requires a new independent plan/run where it is the baseline.
 
 `freeze_model_lock.py` verifies OOF evidence and artifact hashes, writes a `frozen` lock and a separate `model-lock.json.seal.json` binding its SHA-256. In the default end-to-end run, the agent proceeds to the supplied held-out file without a routine human approval pause. When the user explicitly requested staged review or pre-test approval, freeze with `--require-human-approval`; `model-lock.json.approval.json` then binds the actual reviewer's statement and time to the exact lock digest. Do not edit the lock to approve it. `approve_model_lock.py` records this optional approval; it cannot authenticate that a human really gave it. Never call it without explicit approval of the displayed lock.
 
