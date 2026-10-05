@@ -6,8 +6,8 @@
     "llm_interface": "",
     "repository_url": ""
   },
-  "exploration": "Describe observed training issues and how missing targets, duplicate entities and potential leakage were handled.",
-  "preprocessing": "Explain the data-based reasons for each model's imputation, encoding and scaling choices.",
+  "exploration": "Describe observed training issues and how missing targets, duplicate entities and potential leakage were handled. For distribution claims, cite saved skewness, excess-kurtosis or Tukey-IQR evidence and preserve its stated limitation.",
+  "preprocessing": "Explain the data-based reasons for each model's imputation, encoding and scaling choices. Do not infer heavy tails from skewness/min-max or call statistical outlier flags confirmed errors; never use vague claims such as 'tails differ'.",
   "features": "Explain feature exclusions/engineering, or justify retaining all eligible predictors.",
   "model_rationale": "Explain why each classifier was a suitable candidate, its expected strength and limitation, and the bounded search and explicit stopping rule.",
   "findings": "Interpret verified validation/test results without changing model decisions. Distinguish numerical ranking from meaningful superiority; discuss fold variability and generalization.",

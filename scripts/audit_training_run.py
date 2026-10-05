@@ -24,10 +24,12 @@ def audit(results_path, lock_path=None):
     plan = variant["plan"]
     models = {}
     for name, model in variant["models"].items():
+        spec = next(spec for spec in plan["models"] if spec["name"] == name)
         models[name] = {
             "type": model["type"],
-            "predefined_grid": next(spec["grid"] for spec in plan["models"] if spec["name"] == name),
-            "fixed_params": next(spec["params"] for spec in plan["models"] if spec["name"] == name),
+            "predefined_grid": spec["grid"],
+            "fixed_params": spec["params"],
+            "fixed_param_rationale": spec.get("fixed_param_rationale"),
             "outer_folds": [{"fold": fold["fold"], "selected_params": fold["best_params"],
                              "inner_search": fold.get("inner_search"), "outer_metrics": fold["metrics"],
                              "tuning_boundary": fold["tuning_boundary"]}
@@ -52,6 +54,14 @@ def audit(results_path, lock_path=None):
             unresolved.append(f"feature_provenance:{feature}")
     if any(fold["inner_search"] is None for model in models.values() for fold in model["outer_folds"]):
         unresolved.append("Per-outer-fold inner-CV candidate scores were not preserved")
+    for name, model in models.items():
+        if model["fixed_params"] and model["fixed_param_rationale"] is None:
+            unresolved.extend(f"fixed_param_rationale:{name}:{parameter}"
+                              for parameter in model["fixed_params"])
+        elif model["fixed_param_rationale"]:
+            unresolved.extend(f"fixed_param_value_source:{name}:{parameter}"
+                              for parameter, record in model["fixed_param_rationale"].items()
+                              if record["value_source"] == "unknown")
     return {
         "audit_scope": "training_only",
         "held_out_data_accessed_by_audit": False,

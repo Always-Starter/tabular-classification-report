@@ -18,19 +18,21 @@ If the user or authoritative assignment/task/dataset metadata explicitly supplie
 
 Excel adds `--sheet Data` to schema inspection and diagnosis. The diagnosis CLI requires the resolved target and does not infer it. Diagnose training only. Ask about dependent observations or unresolved high-risk feature provenance when these could invalidate the experiment. In explicitly requested staged review, show observations, uncertainties, candidate leakage/provenance issues, and a reasonable challenge point; stop before drafting a plan. Approval starts Checkpoint 2. Otherwise, document the findings and proceed if no blocking uncertainty remains.
 
+For each numeric column, inspect the saved `distribution_evidence`: sample skewness and its declared material threshold, excess kurtosis as a descriptive tail-weight signal, and Tukey-IQR potential-outlier counts. Keep the concepts separate. Do not claim heavy tails from skewness or extreme min/max values, do not call IQR flags data errors, and do not use "tails differ" as a generic justification. If a preprocessing choice depends on these properties, cite the relevant measured field and retain its limitation.
+
 ## 2. Modelling plan
 
 Use `tests/fixtures/example-plan.json` as a schema example, not as a default experiment. Write the actual plan from training evidence. Then:
 
 `python scripts/validate_plan.py /runs/run1/plan.json`
 
-Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. The plan proposes candidates, not a proven winner. Validation does not fit models. In explicitly requested staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. Otherwise, document the plan and proceed within its declared limits.
+Explain each candidate model's observed basis, expected strength and limitation; data-specific preprocessing; primary/secondary metric roles; optional feature handling; splits; bounded tuning and stopping; and any material sensitivity rationale. For every fixed estimator parameter, record both why it was not tuned and the source/rationale for its exact value; use an explicit unknown source when unavailable. The plan proposes candidates, not a proven winner. Validation does not fit models. In explicitly requested staged review, show the validated plan, specific review questions and challengeable alternatives, then stop; approval starts Checkpoint 3 fitting. Otherwise, document the plan and proceed within its declared limits.
 
 ## 3. Development and optional Model Lock
 
 `python scripts/run_nested_cv.py --train /data/train.csv --plan /runs/run1/plan.json --output-dir /runs/run1/development`
 
-The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Inner CV selects hyperparameters; outer CV evaluates the tuned procedure. Review `training_results.json`, fold variability, near-ties, numeric-grid boundary flags, warnings and any sensitivities. Do not automatically widen an edge-hit grid or treat a tiny score difference as proof of superiority. If an independent holdout exists, write `review.json`:
+The development directory must be empty. All candidate and sensitivity preprocessing is fitted inside nested CV; final candidates are refitted on all eligible training rows. Inner CV selects hyperparameters; outer CV evaluates the tuned procedure. Review `training_results.json`, fold variability, near-ties, numeric-grid boundary metadata, warnings and any sensitivities. A two-value endpoint indicates coarse coverage only because either choice must be an endpoint. An edge selected after interior candidates were evaluated supports a future independent untested-direction question, not automatic widening of the current run. Do not treat a tiny score difference as proof of superiority. If an independent holdout exists, write `review.json`:
 
 ```json
 {

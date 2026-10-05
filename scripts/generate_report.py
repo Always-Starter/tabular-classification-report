@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate traceable Markdown and a two-page main PDF plus separate Reflection."""
 import argparse
+import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 from common import code_hashes, read_json, sha, write_json
@@ -45,6 +46,49 @@ def preprocessing_text(config):
     return "; ".join(parts)
 
 
+def fixed_param_rationale_text(spec):
+    """Summarise why fixed parameters were not tuned and where exact values came from."""
+    if not spec["params"]:
+        return "No estimator parameters were fixed"
+    records = spec.get("fixed_param_rationale")
+    if records is None:
+        return "Fixed-parameter provenance was not recorded in this legacy plan"
+    parts = []
+    for parameter in spec["params"]:
+        label = parameter.replace("_", " ")
+        record = records[parameter]
+        if record["value_source"] == "unknown":
+            value_basis = "exact-value source unknown"
+        else:
+            source = record["value_source"].replace("_", " ")
+            value_basis = f"exact-value source {source}: {record['value_rationale']}"
+        parts.append(f"{label} - {value_basis}; not tuned: {record['not_tuned_reason']}")
+    return "Fixed-parameter rationale: " + " | ".join(parts)
+
+
+def tuning_boundary_text(boundary, grid):
+    """Distinguish inevitable two-value endpoints from edges selected over interior candidates."""
+    parts = []
+    for parameter, details in boundary.items():
+        label = parameter.removeprefix("model__").replace("_", " ")
+        count = details.get("distinct_values_evaluated")
+        if count is None:
+            values = grid.get(parameter, [])
+            count = len(set(values)) if all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                                            for value in values) else None
+        interior = details.get("interior_candidates_evaluated", bool(count and count > 2))
+        selected = details["selected"]
+        edge = details["edge"]
+        if count == 2 and not interior:
+            parts.append(f"{label}={selected} selected the {edge} endpoint of a two-value grid; endpoint selection "
+                         "was inevitable and indicates coarse search coverage, not evidence that the optimum lies "
+                         "outside the evaluated range")
+        else:
+            parts.append(f"{label}={selected} selected the {edge} edge after interior candidates were evaluated; "
+                         "this supports an untested-direction question only for a future independent run")
+    return ". ".join(parts)
+
+
 def confusion_text(matrix, classes, positive_class=None):
     if len(classes) == 2 and positive_class in classes:
         pos = classes.index(positive_class)
@@ -56,6 +100,41 @@ def confusion_text(matrix, classes, positive_class=None):
         f"{actual} -> " + ", ".join(f"{predicted}: {matrix[row][col]:,}"
                                       for col, predicted in enumerate(classes))
         for row, actual in enumerate(classes)) + "."
+
+
+def validate_distribution_language(narrative, diagnosis):
+    """Reject distribution claims that overstate the saved training-only EDA."""
+    fields = ("exploration", "preprocessing", "features", "model_rationale", "findings", "limitations")
+    summary = diagnosis.get("numeric_distribution_summary", {})
+    material_skew = set(summary.get("material_skewness_columns", []))
+    if not material_skew:  # Backward-compatible evidence extraction for legacy diagnoses.
+        material_skew = {
+            column for column, details in diagnosis.get("numeric", {}).items()
+            if details.get("skew") is not None and abs(details["skew"]) >= 1.0
+        }
+    high_kurtosis = set(summary.get("high_excess_kurtosis_columns", []))
+    hedges = ("suggest", "consistent with", "descriptive", "signal", "may", "possible", "potential")
+    outlier_qualifiers = ("potential", "candidate", "flagged", "statistical", "possible", "suspected",
+                          "unverified", "not established", "not confirmed", "unknown")
+
+    for field in fields:
+        for sentence in re.split(r"(?<=[.!?])\s+", str(narrative.get(field, ""))):
+            lowered = sentence.lower()
+            if re.search(r"\btails? differ\b", lowered):
+                raise ValueError("Narrative claim 'tails differ' is too vague; cite a saved skewness, excess-kurtosis, "
+                                 "or IQR-fence result instead")
+            if re.search(r"\b(?:heavy|thick)[ -]?tails?\b|\bheavy[ -]?tailed\b", lowered):
+                if not high_kurtosis or "excess kurtosis" not in lowered or not any(term in lowered for term in hedges):
+                    raise ValueError("Heavy-tail language requires saved high excess-kurtosis evidence and qualified "
+                                     "wording; the diagnosis does not prove a heavy-tailed distribution")
+            if re.search(r"\b(?:strong|pronounced|material|marked|significant) skew(?:ness|ed)?\b", lowered):
+                if not material_skew:
+                    raise ValueError("Material-skewness language requires a column meeting the declared skew threshold")
+            if "outlier" in lowered:
+                describes_method_robustness = any(term in lowered for term in ("sensitive to outlier", "robust to outlier"))
+                if not describes_method_robustness and not any(term in lowered for term in outlier_qualifiers):
+                    raise ValueError("Dataset outliers must be described as potential/statistical flags unless domain "
+                                     "review has independently confirmed their status")
 
 
 def generate(training, diagnosis, narrative, output_dir, variant="baseline", test_results=None, lock=None,
@@ -99,6 +178,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     text_keys = ("exploration", "preprocessing", "features", "model_rationale", "findings", "limitations")
     if any(not isinstance(n.get(k), str) or not n[k].strip() for k in text_keys):
         raise ValueError(f"Narrative must include nonempty text for {text_keys}")
+    validate_distribution_language(n, dg)
     metadata_keys = ("full_name", "matric_number", "llm_model_version", "llm_interface", "repository_url")
     meta = n.get("metadata", {})
     missing = [k for k in metadata_keys if not str(meta.get(k, "")).strip()]
@@ -133,20 +213,26 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         held_score = test["models"][preferred]["metrics"][metric]
         cv_display = "N/A" if cv_score is None else f"{cv_score:.4f}"
         held_display = "N/A" if held_score is None else f"{held_score:.4f}"
-        summary = (f"Frozen pre-test choice: {model_labels[preferred]}. "
-                   f"Nested-CV {metric.replace('_', ' ')}: {cv_display}; "
-                   f"held-out: {held_display}. The model choice was not revised after held-out evaluation."
+        summary_emphasis = (f"Frozen pre-test choice: {model_labels[preferred]}. "
+                            f"Nested-CV {metric.replace('_', ' ')}: {cv_display}; "
+                            f"held-out: {held_display}.")
+        summary = (summary_emphasis + " The model choice was not revised after held-out evaluation."
                    + (" This is a presentation-only derivative from verified saved evidence; no model was refitted."
                       if presentation_only_rerender else ""))
     else:
-        summary = (f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}. "
-                   "No independent held-out result is claimed.")
+        summary_emphasis = f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}."
+        summary = summary_emphasis + " No independent held-out result is claimed."
     add(0, "At a glance", summary)
-    add(0, "Submission details", f"{meta.get('full_name') or '[name not supplied]'} | "
-        f"Matriculation number: {meta.get('matric_number') or '[not supplied]'}\n"
-        f"LLM model/version: {meta.get('llm_model_version') or '[not supplied]'} | "
-        f"Interface: {meta.get('llm_interface') or '[not supplied]'}\n"
-        f"Skill repository: {meta.get('repository_url') or '[not supplied]'}")
+    submission_rows = [
+        ["Name", meta.get("full_name") or "[not supplied]",
+         "Matriculation number", meta.get("matric_number") or "[not supplied]"],
+        ["LLM model/version", meta.get("llm_model_version") or "[not supplied]",
+         "Interface", meta.get("llm_interface") or "[not supplied]"],
+        ["Skill repository", meta.get("repository_url") or "[not supplied]", "", ""],
+    ]
+    add(0, "Submission details", "\n".join(
+        f"{row[0]}: {row[1]}" + (f" | {row[2]}: {row[3]}" if row[2] else "")
+        for row in submission_rows))
     class_counts = "; ".join(f"{label}: {count:,}" for label, count in tr["class_counts"].items())
     add(0, "Data exploration and cleaning", f"Training: {tr['input_rows']:,} rows; {tr['eligible_rows']:,} labelled rows; "
         f"{tr['missing_targets']} missing targets excluded. Target: {p['target']}; class counts: {class_counts}. "
@@ -157,10 +243,9 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         boundary = model.get("tuning_boundary", {})
         add(0, f"Model: {model_labels[spec['name']]}", "Preparation: " + preprocessing_text(spec["preprocessing"])
             + ". Selected settings: " + settings_text(model["best_params"])
-            + ". Fixed settings: " + settings_text(spec["params"]) + "."
-            + (" Numeric search edge: " + ", ".join(f"{key.removeprefix('model__').replace('_', ' ')}="
-                                                    f"{value['selected']} ({value['edge']})"
-                 for key, value in boundary.items()) + "; values beyond this edge were not evaluated."
+            + ". Fixed settings: " + settings_text(spec["params"]) + ". "
+            + fixed_param_rationale_text(spec) + "."
+            + (" Search-boundary interpretation: " + tuning_boundary_text(boundary, spec["grid"]) + "."
                if boundary else ""))
     add(0, "Model choice and stopping rules", n["model_rationale"]
         + f" The declared search used {tr['planned_fits']} planned fits across baseline and sensitivity analyses; "
@@ -259,14 +344,19 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     blue = colors.HexColor("#173d5b")
     style = ParagraphStyle("body", fontName="ReportFont", fontSize=10.1, leading=14.5,
                            spaceAfter=7, textColor=ink)
+    page_one_body = ParagraphStyle("page-one-body", parent=style, fontSize=10.0, leading=14.0,
+                                   spaceAfter=6)
     heading = ParagraphStyle("heading", parent=style, fontName=bold_name, fontSize=11.5, leading=15,
                              spaceBefore=11, spaceAfter=4, textColor=blue)
+    page_one_heading = ParagraphStyle("page-one-heading", parent=heading, spaceBefore=9)
     title_style = ParagraphStyle("title", parent=heading, fontSize=18, leading=22,
                                  spaceBefore=0, spaceAfter=2, textColor=blue)
     eyebrow = ParagraphStyle("eyebrow", parent=style, fontSize=9.1, leading=12,
                              textColor=colors.HexColor("#526574"), spaceAfter=3)
     model_heading = ParagraphStyle("model-heading", parent=heading, fontSize=10.5, leading=14,
                                    spaceBefore=6, spaceAfter=2)
+    page_one_model_heading = ParagraphStyle("page-one-model-heading", parent=model_heading,
+                                            spaceBefore=5)
     reflection_body = ParagraphStyle("reflection-body", parent=style, fontSize=9.6, leading=13.2,
                                      spaceAfter=5)
     reflection_heading = ParagraphStyle("reflection-heading", parent=heading, fontSize=11.2, leading=14,
@@ -278,6 +368,8 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                    textColor=blue)
     def para(text, sty=style):
         return Paragraph(escape(text).replace("\n", "<br/>"), sty)
+    def para_markup(markup, sty=style):
+        return Paragraph(markup, sty)
     def grid(rows, widths, highlighted=()):
         cells = [[para(cell, table_header if row == 0 else table_primary if row in highlighted else compact)
                   for cell in values] for row, values in enumerate(rows)]
@@ -305,8 +397,11 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
             if page == 0 and i == 0:
                 story.extend([para(title, title_style), para(text, eyebrow)])
             elif title == "At a glance":
-                story.append(para(title, heading))
-                callout = Table([[para(text, style)]], colWidths=[500], hAlign="LEFT")
+                story.append(para(title, page_one_heading))
+                callout_markup = escape(text).replace(
+                    escape(summary_emphasis),
+                    f'<font name="{bold_name}">{escape(summary_emphasis)}</font>', 1)
+                callout = Table([[para_markup(callout_markup, page_one_body)]], colWidths=[500], hAlign="LEFT")
                 callout.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#e8f2f8")),
                                             ("LINEBEFORE", (0, 0), (0, -1), 3, colors.HexColor("#24709c")),
                                             ("LEFTPADDING", (0, 0), (-1, -1), 11),
@@ -314,6 +409,31 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                             ("TOPPADDING", (0, 0), (-1, -1), 8),
                                             ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
                 story.append(callout)
+            elif title == "Submission details":
+                story.append(para(title, page_one_heading))
+                repo_url = submission_rows[2][1]
+                repo_label = repo_url
+                repo_value = (para_markup(f'<link href="{escape(repo_url)}" color="#176a9a">'
+                                          f'<u>{escape(repo_label)}</u></link>', compact)
+                              if repo_url != "[not supplied]" else para(repo_url, compact))
+                meta_cells = [
+                    [para(row[0], table_header), para(row[1], compact),
+                     para(row[2], table_header), para(row[3], compact)]
+                    for row in submission_rows[:2]
+                ]
+                meta_cells.append([para("Skill repository", table_header), repo_value, "", ""])
+                metadata_table = Table(meta_cells, colWidths=[115, 115, 135, 135], hAlign="LEFT")
+                metadata_table.setStyle(TableStyle([
+                    ("SPAN", (1, 2), (3, 2)),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8f2f8")),
+                    ("BACKGROUND", (2, 0), (2, 1), colors.HexColor("#e8f2f8")),
+                    ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#f7f9fb")]),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("LINEBELOW", (0, 0), (-1, -1), .35, colors.HexColor("#c6d4de")),
+                ]))
+                story.append(metadata_table)
             elif title == "Findings and discussion":
                 story.append(para(title, heading))
                 callout = Table([[para(text, style)]], colWidths=[500], hAlign="LEFT")
@@ -328,9 +448,22 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                 if page == 2 and i > 0:
                     story.extend([para(title, reflection_heading), para(text, reflection_body)])
                 else:
-                    title_style_for_block = title_style if i == 0 else model_heading if title.startswith("Model:") else heading
-                    story.extend([para(title, title_style_for_block), para(text)])
-            markdown.extend([f"## {title}", "", text, ""])
+                    title_style_for_block = (title_style if i == 0 else
+                                             page_one_model_heading if page == 0 and title.startswith("Model:") else
+                                             page_one_heading if page == 0 else heading)
+                    body_style_for_block = page_one_body if page == 0 else style
+                    story.extend([para(title, title_style_for_block), para(text, body_style_for_block)])
+            if title == "Submission details":
+                markdown.extend([f"## {title}", "", "| Property | Value |", "| --- | --- |"])
+                for row in submission_rows:
+                    value = (f"[{row[1]}]({row[1]})" if row[0] == "Skill repository"
+                             and row[1] != "[not supplied]" else row[1])
+                    markdown.append(f"| {row[0]} | {value} |")
+                    if row[2]:
+                        markdown.append(f"| {row[2]} | {row[3]} |")
+                markdown.append("")
+            else:
+                markdown.extend([f"## {title}", "", text, ""])
             if page == 1 and i == 0:
                 story.extend([grid(table, [128, 135, 138, 99], primary_rows), Spacer(1, 5)])
                 markdown.extend(markdown_table(table))

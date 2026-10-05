@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "target": "label",
   "task": "binary",
   "positive_class": "no",
@@ -69,6 +69,13 @@
       "params": {
         "max_iter": 3000
       },
+      "fixed_param_rationale": {
+        "max_iter": {
+          "not_tuned_reason": "This convergence safeguard is not a model-selection objective.",
+          "value_source": "convergence_requirement",
+          "value_rationale": "A cap of 3000 iterations is deliberately generous for the small synthetic fixture so convergence failure is surfaced rather than selected around."
+        }
+      },
       "grid": {
         "model__C": [
           0.1,
@@ -92,6 +99,13 @@
       "type": "decision_tree",
       "params": {
         "max_depth": 3
+      },
+      "fixed_param_rationale": {
+        "max_depth": {
+          "not_tuned_reason": "The synthetic contract test tunes leaf size only to keep the fixture fast and deterministic.",
+          "value_source": "predeclared_rule",
+          "value_rationale": "Depth 3 deliberately creates a shallow tree for this software fixture; it is not a recommendation for real data."
+        }
       },
       "grid": {
         "model__min_samples_leaf": [

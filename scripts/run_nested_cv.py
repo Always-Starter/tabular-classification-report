@@ -18,7 +18,7 @@ from validate_plan import validate
 
 
 def numeric_grid_boundaries(grid, selected):
-    """Flag selected edges of prespecified numeric grids without extending them."""
+    """Describe numeric endpoint selections without treating every endpoint as directional evidence."""
     edges = {}
     for parameter, values in grid.items():
         if len(values) < 2 or any(isinstance(v, (bool, np.bool_)) or
@@ -30,8 +30,24 @@ def numeric_grid_boundaries(grid, selected):
         choice = selected[parameter]
         edge = "lower" if choice == ordered[0] else "upper" if choice == ordered[-1] else None
         if edge:
-            edges[parameter] = {"selected": choice, "edge": edge,
-                                "evaluated_min": ordered[0], "evaluated_max": ordered[-1]}
+            interior = len(ordered) > 2
+            edges[parameter] = {
+                "selected": choice,
+                "edge": edge,
+                "evaluated_min": ordered[0],
+                "evaluated_max": ordered[-1],
+                "distinct_values_evaluated": len(ordered),
+                "interior_candidates_evaluated": interior,
+                "boundary_type": "edge_with_interior_candidates" if interior else "two_value_grid_endpoint",
+                "supports_outside_range_question": interior,
+                "interpretation": (
+                    "Interior numeric candidates were evaluated; this edge selection supports an untested-direction "
+                    "question for a future independent run, not adaptive expansion of the current run."
+                    if interior else
+                    "Every choice in a two-value numeric grid is an endpoint; this records coarse search coverage "
+                    "and is not directional evidence that the optimum lies outside the evaluated range."
+                ),
+            }
     return edges
 
 

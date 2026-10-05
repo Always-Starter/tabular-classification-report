@@ -14,6 +14,11 @@ from scipy.stats import chi2_contingency, pointbiserialr
 from common import load_table
 
 
+MATERIAL_SKEW_ABS_THRESHOLD = 1.0
+HIGH_EXCESS_KURTOSIS_THRESHOLD = 3.0
+TUKEY_IQR_MULTIPLIER = 1.5
+
+
 def json_value(value):
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -24,6 +29,52 @@ def json_value(value):
     if pd.isna(value):
         return None
     return value
+
+
+def distribution_evidence(series):
+    """Return declared descriptive signals without labelling observations as errors."""
+    finite = series.replace([np.inf, -np.inf], np.nan).dropna()
+    skew = json_value(finite.skew())
+    excess_kurtosis = json_value(finite.kurt())
+    q1 = json_value(finite.quantile(.25))
+    q3 = json_value(finite.quantile(.75))
+    iqr = None if q1 is None or q3 is None else q3 - q1
+    estimable = bool(iqr is not None and iqr > 0)
+    lower_fence = q1 - TUKEY_IQR_MULTIPLIER * iqr if estimable else None
+    upper_fence = q3 + TUKEY_IQR_MULTIPLIER * iqr if estimable else None
+    lower_count = int((finite < lower_fence).sum()) if estimable else None
+    upper_count = int((finite > upper_fence).sum()) if estimable else None
+    flagged_count = lower_count + upper_count if estimable else None
+    return {
+        "skewness": {
+            "metric": "sample skewness",
+            "value": skew,
+            "material_abs_threshold": MATERIAL_SKEW_ABS_THRESHOLD,
+            "material_flag": bool(abs(skew) >= MATERIAL_SKEW_ABS_THRESHOLD) if skew is not None else None,
+        },
+        "tail_weight": {
+            "metric": "sample excess kurtosis (Fisher; normal reference 0)",
+            "value": excess_kurtosis,
+            "high_signal_threshold": HIGH_EXCESS_KURTOSIS_THRESHOLD,
+            "high_signal_flag": bool(excess_kurtosis >= HIGH_EXCESS_KURTOSIS_THRESHOLD)
+            if excess_kurtosis is not None else None,
+            "claim_limit": "A high value is descriptive evidence, not proof of a heavy-tailed distribution.",
+        },
+        "potential_outliers": {
+            "method": f"Tukey {TUKEY_IQR_MULTIPLIER:g} x IQR fences",
+            "estimable": estimable,
+            "q1": q1,
+            "q3": q3,
+            "iqr": json_value(iqr),
+            "lower_fence": json_value(lower_fence),
+            "upper_fence": json_value(upper_fence),
+            "below_fence_count": lower_count,
+            "above_fence_count": upper_count,
+            "flagged_count": flagged_count,
+            "flagged_percent": 100 * flagged_count / len(finite) if estimable and len(finite) else None,
+            "claim_limit": "Flags are potential statistical outliers, not confirmed errors or invalid records.",
+        },
+    }
 
 
 def cramers_v(x, y):
@@ -102,16 +153,41 @@ def diagnose(frame, target):
         series = predictors[column]
         clean = series.replace([np.inf, -np.inf], np.nan)
         quantiles = clean.quantile([0, .01, .05, .25, .5, .75, .95, .99, 1])
+        evidence = distribution_evidence(series)
         result["numeric"][str(column)] = {
             "count": int(series.notna().sum()),
             "nonfinite_count": int(np.isinf(series).sum()),
             "mean": json_value(clean.mean()),
             "std": json_value(clean.std()),
-            "skew": json_value(clean.skew()),
+            "skew": evidence["skewness"]["value"],
             "quantiles": {str(key): json_value(value) for key, value in quantiles.items()},
             "negative_count": int((clean < 0).sum()),
             "zero_count": int((clean == 0).sum()),
+            "distribution_evidence": evidence,
         }
+
+    result["numeric_distribution_summary"] = {
+        "material_skewness_columns": [
+            column for column, details in result["numeric"].items()
+            if details["distribution_evidence"]["skewness"]["material_flag"]
+        ],
+        "high_excess_kurtosis_columns": [
+            column for column, details in result["numeric"].items()
+            if details["distribution_evidence"]["tail_weight"]["high_signal_flag"]
+        ],
+        "iqr_flagged_columns": [
+            {"column": column,
+             "flagged_count": details["distribution_evidence"]["potential_outliers"]["flagged_count"],
+             "flagged_percent": details["distribution_evidence"]["potential_outliers"]["flagged_percent"]}
+            for column, details in result["numeric"].items()
+            if (details["distribution_evidence"]["potential_outliers"]["flagged_count"] or 0) > 0
+        ],
+        "claim_rules": {
+            "skewness": "Call skewness material only when the declared absolute threshold is met.",
+            "tail_weight": "Report measured excess kurtosis as a descriptive signal; do not claim heavy tails as proven.",
+            "outliers": "Call IQR-fence observations potential statistical outliers; domain review is required to call them errors.",
+        },
+    }
 
     categorical_columns = [column for column in predictors.columns if column not in numeric_columns]
     for column in categorical_columns:

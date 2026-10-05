@@ -13,11 +13,11 @@ def require(condition, message):
 
 
 def validate(plan):
-    require(plan.get("schema_version") in {2, 3}, "Only plan schema_version 2 or 3 is supported")
+    require(plan.get("schema_version") in {2, 3, 4}, "Only plan schema_version 2, 3 or 4 is supported")
     schema = plan["schema_version"]
     required = {"schema_version", "target", "task", "features", "numeric_features", "categorical_features",
                 "excluded_features", "seed", "cv", "metrics", "models", "decision_trace", "sensitivities"}
-    if schema == 3:
+    if schema >= 3:
         required |= {"semantics", "feature_provenance", "candidate_selection", "model_count_rationale"}
     require(required <= plan.keys(), f"Missing plan fields: {sorted(required - plan.keys())}")
     allowed = required | {"positive_class", "threshold", "model_count_rationale"}
@@ -34,7 +34,7 @@ def validate(plan):
     require(isinstance(plan["excluded_features"], dict) and all(isinstance(v, str) and v.strip() for v in plan["excluded_features"].values()), "Excluded features need reasons")
     require(not (features & set(plan["excluded_features"])), "Excluded features cannot also be selected")
     require(plan["target"] not in plan["excluded_features"], "Target is not an excluded predictor")
-    if schema == 3:
+    if schema >= 3:
         semantics = plan["semantics"]
         semantic_fields = {"target_source", "target_meaning", "positive_class_meaning",
                            "false_positive_cost", "false_negative_cost", "row_dependence"}
@@ -87,7 +87,7 @@ def validate(plan):
     metrics = plan["metrics"]
     metric_fields = {"primary", "secondary"} if schema == 2 else {"primary", "secondary", "rationale", "status"}
     require(set(metrics) == metric_fields and isinstance(metrics["secondary"], list), "Invalid metrics fields")
-    if schema == 3:
+    if schema >= 3:
         require(isinstance(metrics["rationale"], str) and metrics["rationale"].strip(), "Metric needs a rationale")
         require(metrics["status"] in {"confirmed", "provisional_unknown_semantics", "provisional_unknown_costs"},
                 "Invalid metric status")
@@ -107,7 +107,7 @@ def validate(plan):
         require(all(isinstance(v, str) and v.strip() for v in decision.values()), "Decision evidence cannot be empty")
     require(isinstance(plan["models"], list) and 2 <= len(plan["models"]) <= 3,
             "Compare two or three models; a third needs a documented reason")
-    if len(plan["models"]) == 3 or schema == 3:
+    if len(plan["models"]) == 3 or schema >= 3:
         require(isinstance(plan.get("model_count_rationale"), str) and bool(plan["model_count_rationale"].strip()),
                 "Model count needs a nonempty rationale grounded in training evidence")
     elif "model_count_rationale" in plan:
@@ -116,10 +116,12 @@ def validate(plan):
     names = []
     for spec in plan["models"]:
         model_fields = {"name", "type", "params", "grid", "preprocessing"}
-        if schema == 3:
+        if schema >= 3:
             model_fields |= {"rationale", "grid_rationale", "stopping_rule"}
+        if schema >= 4:
+            model_fields.add("fixed_param_rationale")
         require(set(spec) == model_fields, "Invalid per-model fields")
-        if schema == 3:
+        if schema >= 3:
             for key in ("rationale", "grid_rationale", "stopping_rule"):
                 require(isinstance(spec[key], str) and spec[key].strip(), f"Model {key} must be nonempty")
         require(isinstance(spec["name"], str) and re.fullmatch(r"[a-z][a-z0-9_]{0,39}", spec["name"]), "Unsafe model name")
@@ -135,6 +137,28 @@ def validate(plan):
         require(cfg["categorical_imputer"] in {"most_frequent", "constant"}, "Unsupported categorical imputation")
         require(cfg["categorical_encoder"] in {"onehot", "ordinal"}, "Unsupported encoder")
         require(isinstance(spec["grid"], dict) and isinstance(spec["params"], dict), "params/grid must be objects")
+        require(not ({f"model__{key}" for key in spec["params"]} & set(spec["grid"])),
+                "A parameter cannot be both fixed in params and tuned in grid")
+        if schema >= 4:
+            fixed = spec["fixed_param_rationale"]
+            require(isinstance(fixed, dict) and set(fixed) == set(spec["params"]),
+                    "fixed_param_rationale must cover every fixed params key exactly")
+            sources = {"training_diagnosis", "compute_budget", "convergence_requirement", "user_supplied",
+                       "authoritative_requirement", "prior_independent_evidence", "implementation_constraint",
+                       "predeclared_rule", "library_default", "unknown"}
+            for parameter, record in fixed.items():
+                require(isinstance(record, dict)
+                        and set(record) == {"not_tuned_reason", "value_source", "value_rationale"},
+                        f"Fixed parameter {parameter} needs not_tuned_reason, value_source and value_rationale")
+                require(isinstance(record["not_tuned_reason"], str) and record["not_tuned_reason"].strip(),
+                        f"Fixed parameter {parameter} needs a reason it was not tuned")
+                require(record["value_source"] in sources, f"Fixed parameter {parameter} has invalid value_source")
+                if record["value_source"] == "unknown":
+                    require(record["value_rationale"] is None,
+                            f"Fixed parameter {parameter} with unknown value_source must use null value_rationale")
+                else:
+                    require(isinstance(record["value_rationale"], str) and record["value_rationale"].strip(),
+                            f"Fixed parameter {parameter} needs a rationale for the exact fixed value")
         require(all(k.startswith("model__") for k in spec["grid"]), "Grid tunes estimator parameters; declare preprocessing sensitivity separately")
         require(not ({"random_state", "n_jobs"} & set(spec["params"])), "Seeds/jobs are controlled by the runner")
         require(not ({"model__random_state", "model__n_jobs"} & set(spec["grid"])), "Do not tune random seeds/jobs")

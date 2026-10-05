@@ -1,12 +1,12 @@
-# Executable plan contract (schema v3)
+# Executable plan contract (schema v4)
 
-`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example. Schema v2 remains readable for preserved runs; create new plans as v3.
+`scripts/validate_plan.py` is the executable validator. [../tests/fixtures/example-plan.json](../tests/fixtures/example-plan.json) is a complete binary example. Schemas v2 and v3 remain readable for preserved runs; create new plans as v4.
 
 Top-level fields:
 
 | Field | Contract |
 | --- | --- |
-| schema_version | 3 |
+| schema_version | 4 |
 | target, task | Column name; `binary` or `multiclass` |
 | features | Nonempty ordered predictor names; excludes target |
 | numeric_features, categorical_features | Disjoint lists exactly partitioning features |
@@ -41,7 +41,15 @@ Group/time columns must appear in `excluded_features`. Training checks fold feas
 
 ## Per-model specification
 
-Each object has `name` (lowercase safe filename), `type`, `params` (fixed estimator parameters), `grid` (list-valued `model__` parameters), `preprocessing`, `rationale`, `grid_rationale`, and `stopping_rule`. Types: `logistic_regression`, `random_forest`, `extra_trees`, `decision_tree`, `knn`, `gaussian_nb`, `support_vector_classifier`.
+Each object has `name` (lowercase safe filename), `type`, `params` (fixed estimator parameters), `fixed_param_rationale`, `grid` (list-valued `model__` parameters), `preprocessing`, `rationale`, `grid_rationale`, and `stopping_rule`. Types: `logistic_regression`, `random_forest`, `extra_trees`, `decision_tree`, `knn`, `gaussian_nb`, `support_vector_classifier`.
+
+`fixed_param_rationale` must cover every `params` key exactly. Each record contains:
+
+- `not_tuned_reason`: why this parameter was excluded from the tuning grid;
+- `value_source`: one of `training_diagnosis`, `compute_budget`, `convergence_requirement`, `user_supplied`, `authoritative_requirement`, `prior_independent_evidence`, `implementation_constraint`, `predeclared_rule`, `library_default`, or `unknown`;
+- `value_rationale`: why this exact value was chosen rather than another value. It must be a nonempty string unless `value_source` is `unknown`; an unknown source requires JSON `null` so a rationale cannot be reconstructed after the fact.
+
+These are two separate questions. A limited tuning budget can explain why `max_depth` was not tuned but does not explain why its fixed value is 12. Empty `params` therefore requires an empty rationale object; unspecified library defaults remain recorded in resolved training results rather than receiving invented plan rationales.
 
 Preprocessing requires:
 
@@ -55,7 +63,9 @@ Only estimator parameters are tuned in `grid`. Use a declared sensitivity for pr
 
 SVM requires standard or robust numeric scaling and currently supports only stratified CV because its three-fold probability calibration is not yet group/time-aware. The runner applies a conservative 2 GiB pairwise-kernel guard to nonlinear candidates. Calibration adds internal work beyond the explicit grid-fit count, so keep SVM grids especially small and document the compute trade-off.
 
-Before fitting, justify the primary metric, candidate-set scope, each family, each grid and per-model preprocessing from the training diagnosis. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. Development results preserve candidate-level inner scores for each outer search and the final full-training search, plus final-refit evidence. For numeric grids with at least two distinct values, results save `tuning_boundary` for outer-fold and final-inner choices at the lowest/highest evaluated value. This is uncertainty disclosure, not permission to extend a search after reviewing outer/test scores.
+Before fitting, justify the primary metric, candidate-set scope, each family, each grid, every fixed parameter and per-model preprocessing from the training diagnosis or another recorded source. The bounded search stops after its prespecified inner-CV candidates; outer folds assess the tuned procedure, not an adaptive-refinement signal. Development results preserve candidate-level inner scores for each outer search and the final full-training search, plus final-refit evidence.
+
+For numeric grids with at least two distinct values, results save `tuning_boundary` for outer-fold and final-inner endpoint choices. The metadata records the number of distinct values, whether interior candidates existed, a boundary type and whether the result supports an outside-range question. In a two-value grid, every selection is an endpoint: this is `two_value_grid_endpoint`, evidence of coarse coverage only, and never directional evidence that the optimum lies outside the range. `edge_with_interior_candidates` means at least one interior value was evaluated before an edge won; it supports an untested-direction question for a future independent run, not adaptive expansion or retuning of the current run.
 
 ## Sensitivities
 

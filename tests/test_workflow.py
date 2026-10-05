@@ -12,6 +12,7 @@ from sklearn.impute import SimpleImputer
 import joblib
 import numpy as np
 import pandas as pd
+from pypdf import PdfReader
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -24,7 +25,7 @@ from approve_model_lock import approve
 from evaluate_holdout import evaluate
 from verify_results import verify, verify_training
 from diagnose_training import diagnose
-from generate_report import generate
+from generate_report import generate, validate_distribution_language
 from audit_training_run import audit
 
 
@@ -43,15 +44,46 @@ def frame(n=120, multiclass=False):
 
 
 class Contracts(unittest.TestCase):
+    def test_distribution_evidence_and_claim_guardrails(self):
+        d = frame(200)
+        d["spiky"] = np.concatenate([np.linspace(-1, 1, 199), [50]])
+        diagnosis = diagnose(d, "label")
+        evidence = diagnosis["numeric"]["spiky"]["distribution_evidence"]
+        self.assertTrue(evidence["skewness"]["material_flag"])
+        self.assertTrue(evidence["tail_weight"]["high_signal_flag"])
+        self.assertGreater(evidence["potential_outliers"]["flagged_count"], 0)
+        self.assertIn("spiky", diagnosis["numeric_distribution_summary"]["material_skewness_columns"])
+
+        narrative = {key: "No distribution claim is made."
+                     for key in ("exploration", "preprocessing", "features", "model_rationale", "findings", "limitations")}
+        narrative["preprocessing"] = "Robust scaling was used because distribution tails differ."
+        with self.assertRaisesRegex(ValueError, "tails differ"):
+            validate_distribution_language(narrative, diagnosis)
+        narrative["preprocessing"] = "The data contain outliers."
+        with self.assertRaisesRegex(ValueError, "potential/statistical"):
+            validate_distribution_language(narrative, diagnosis)
+        narrative["preprocessing"] = "The data have heavy tails."
+        with self.assertRaisesRegex(ValueError, "excess-kurtosis"):
+            validate_distribution_language(narrative, diagnosis)
+        narrative["preprocessing"] = ("High excess kurtosis suggests a possible heavy-tail signal; Tukey IQR fences "
+                                       "flagged potential statistical outlier candidates, not confirmed errors.")
+        validate_distribution_language(narrative, diagnosis)
+
     def test_numeric_grid_boundaries_only_report_uncertainty(self):
         grid = {"model__C": [0.1, 1.0, 10.0], "model__criterion": ["gini", "entropy"],
                 "model__single": [7]}
         upper = numeric_grid_boundaries(grid, {"model__C": 10.0,
                                                "model__criterion": "gini", "model__single": 7})
-        self.assertEqual(upper, {"model__C": {"selected": 10.0, "edge": "upper",
-                                               "evaluated_min": 0.1, "evaluated_max": 10.0}})
+        self.assertEqual(upper["model__C"]["boundary_type"], "edge_with_interior_candidates")
+        self.assertTrue(upper["model__C"]["interior_candidates_evaluated"])
+        self.assertTrue(upper["model__C"]["supports_outside_range_question"])
         self.assertEqual(numeric_grid_boundaries(grid, {"model__C": 1.0,
                                                          "model__criterion": "gini", "model__single": 7}), {})
+        coarse = numeric_grid_boundaries({"model__C": [0.1, 1.0]}, {"model__C": 0.1})["model__C"]
+        self.assertEqual(coarse["boundary_type"], "two_value_grid_endpoint")
+        self.assertFalse(coarse["interior_candidates_evaluated"])
+        self.assertFalse(coarse["supports_outside_range_question"])
+        self.assertIn("coarse search coverage", coarse["interpretation"])
 
     def test_invalid_plans_fail_before_fitting(self):
         cases = []
@@ -63,13 +95,26 @@ class Contracts(unittest.TestCase):
         p = example(); p["models"][0]["grid"] = {"model__C": [-1]}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__C": list(range(1, 20))}; cases.append(p)
         p = example(); p["models"][0]["grid"] = {"model__random_state": [1]}; cases.append(p)
+        p = example(); p["models"][0]["grid"]["model__max_iter"] = [1000, 3000]; cases.append(p)
         p = example(); p["models"][0]["type"] = "support_vector_classifier"; p["models"][0]["preprocessing"]["scaler"] = "none"; cases.append(p)
         p = example(); p["models"] = p["models"][:1]; cases.append(p)
         p = example(); p["models"].extend([copy.deepcopy(p["models"][0]), copy.deepcopy(p["models"][1])]); cases.append(p)
         p = example(); p["models"].append(copy.deepcopy(p["models"][0])); p["models"][2]["name"] = "third"; p["model_count_rationale"] = ""; cases.append(p)
+        p = example(); del p["models"][0]["fixed_param_rationale"]; cases.append(p)
+        p = example(); p["models"][0]["fixed_param_rationale"] = {}; cases.append(p)
+        p = example(); p["models"][0]["fixed_param_rationale"]["max_iter"]["value_source"] = "unknown"; cases.append(p)
+        p = example(); p["models"][0]["fixed_param_rationale"]["max_iter"]["value_rationale"] = None; cases.append(p)
         for p in cases:
             with self.subTest(plan=p), self.assertRaises((ValueError, TypeError)):
                 validate(p)
+
+    def test_unknown_fixed_value_source_is_explicit(self):
+        p = example()
+        record = p["models"][1]["fixed_param_rationale"]["max_depth"]
+        record["value_source"] = "unknown"
+        record["value_rationale"] = None
+        self.assertEqual(validate(p)["models"][1]["fixed_param_rationale"]["max_depth"]["value_source"],
+                         "unknown")
 
     def test_three_models_require_a_reason(self):
         p = example()
@@ -77,6 +122,13 @@ class Contracts(unittest.TestCase):
         third["name"] = "forest"
         third["type"] = "random_forest"
         third["params"] = {"n_estimators": 10}
+        third["fixed_param_rationale"] = {
+            "n_estimators": {
+                "not_tuned_reason": "The synthetic third-model check does not tune ensemble size.",
+                "value_source": "predeclared_rule",
+                "value_rationale": "Ten trees keep this software test fast; this is not a modelling recommendation."
+            }
+        }
         third["grid"] = {}
         p["models"].append(third)
         p["model_count_rationale"] = "Training diagnosis motivates an additional nonlinear ensemble comparison."
@@ -207,6 +259,10 @@ class Workflow(unittest.TestCase):
         self.assertEqual(audited["audit_scope"], "training_only")
         self.assertFalse(audited["held_out_data_accessed_by_audit"])
         self.assertIsNotNone(audited["models"]["linear"]["outer_folds"][0]["inner_search"])
+        self.assertEqual(audited["models"]["linear"]["fixed_param_rationale"]["max_iter"]["value_source"],
+                         "convergence_requirement")
+        self.assertEqual(audited["models"]["linear"]["tuning_boundary"]["model__C"]["boundary_type"],
+                         "two_value_grid_endpoint")
         m = joblib.load(self.development / "baseline/linear.joblib")
         learned = m.named_steps["preprocess"].named_transformers_["numeric"].named_steps["imputer"].statistics_
         self.assertTrue(np.allclose(learned, frame()[["x1", "x2"]].median().to_numpy()))
@@ -336,6 +392,9 @@ class Workflow(unittest.TestCase):
             narrative.update(exploration="Synthetic data contain missing predictor values.", preprocessing="Fold-local imputation and encoding handle missing values.",
                              features="All three fixture predictors are retained.", model_rationale="Linear and tree boundaries provide a controlled contrast.",
                              findings="Software fixture only; do not interpret these numbers as course results.", limitations="Synthetic data do not establish real-world generalization.")
+            narrative["metadata"] = {"full_name": "Example Student", "matric_number": "A1234567X",
+                                     "llm_model_version": "test-model", "llm_interface": "test-interface",
+                                     "repository_url": "https://example.com/example-skill"}
             write_json(tmp / "narrative.json", narrative)
             manifest = generate(self.development / "training_results.json", tmp / "diagnosis.json", tmp / "narrative.json", tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
             self.assertEqual(manifest["main_pages"], 2)
@@ -352,6 +411,19 @@ class Workflow(unittest.TestCase):
             self.assertIn("## Human in the Loop", report)
             self.assertIn("## Critical Evaluation", report)
             self.assertIn("## Trustworthiness", report)
+            self.assertIn("endpoint of a two-value grid", report)
+            self.assertIn("Fixed-parameter rationale", report)
+            self.assertIn("| Name | Example Student |", report)
+            self.assertIn("| Matriculation number | A1234567X |", report)
+            self.assertIn("| Skill repository | [https://example.com/example-skill](https://example.com/example-skill) |", report)
+            links = [annotation.get_object().get("/A", {}).get("/URI")
+                     for page in PdfReader(tmp / "report/report.pdf").pages
+                     for annotation in (page.get("/Annots") or [])
+                     if annotation.get_object().get("/Subtype") == "/Link"]
+            self.assertIn("https://example.com/example-skill", links)
+            pdf_text = "\n".join(page.extract_text() or ""
+                                 for page in PdfReader(tmp / "report/report.pdf").pages)
+            self.assertIn("https://example.com/example-skill", pdf_text)
             self.assertNotIn("Automated verification aid", report)
             self.assertNotIn('"numeric_imputer"', report)
             locked_hashes = read_json(lock)["code_sha256"]
@@ -431,6 +503,13 @@ class Workflow(unittest.TestCase):
             p = example()
             third = copy.deepcopy(p["models"][1])
             third.update(name="forest", type="random_forest", params={"n_estimators": 10}, grid={})
+            third["fixed_param_rationale"] = {
+                "n_estimators": {
+                    "not_tuned_reason": "The synthetic third-model check does not tune ensemble size.",
+                    "value_source": "predeclared_rule",
+                    "value_rationale": "Ten trees keep this software test fast; this is not a modelling recommendation."
+                }
+            }
             p["models"].append(third)
             p["model_count_rationale"] = "Synthetic three-model software check; no course-data recommendation."
             train = tmp / "train.csv"
