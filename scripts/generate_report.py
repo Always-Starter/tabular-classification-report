@@ -260,9 +260,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         summary_emphasis = (f"Frozen pre-test choice: {model_labels[preferred]}. "
                             f"Nested-CV {metric.replace('_', ' ')}: {cv_display}; "
                             f"held-out: {held_display}.")
-        summary = (summary_emphasis + " The model choice was not revised after held-out evaluation."
-                   + (" This is a presentation-only derivative from verified saved evidence; no model was refitted."
-                      if presentation_only_rerender else ""))
+        summary = summary_emphasis + " The model choice was not revised after held-out evaluation."
     else:
         selected = selection["selected_model"] if selection else None
         summary_emphasis = (f"Development-only prespecified choice: {model_labels[selected]}. "
@@ -300,7 +298,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
             + fixed_param_rationale_text(spec, effective) + "."
             + (" Search-boundary interpretation: " + tuning_boundary_text(boundary, spec["grid"]) + "."
                if boundary else ""))
-    add(0, "Model choice and stopping rules", n["model_rationale"]
+    add(0 if len(p["models"]) == 3 else 1, "Model choice and stopping rules", n["model_rationale"]
         + f" The declared search used {tr['planned_fits']} planned fits across baseline and sensitivity analyses; "
         + "outer folds did not trigger grid expansion or a change of primary metric. Sensitivity variants were "
         + "interpreted as robustness evidence only and were not eligible for selection or locking. "
@@ -375,7 +373,12 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     else:
         add(1, "Findings and discussion", n["findings"])
         add(1, "Limitations", n["limitations"] + f" Selection-eligible development baseline: {variant}.")
-    add(2, "Reflection - outside the two-page report limit", "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection")
+    reflection_title = n.get("reflection_title", "Reflection - outside the two-page report limit")
+    reflection_subtitle = n.get(
+        "reflection_subtitle",
+        "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection",
+    )
+    add(2, reflection_title, reflection_subtitle)
     reflection_titles = {
         "human_oversight": "Human in the Loop",
         "challenged_decision": "Critical Evaluation",
@@ -408,17 +411,17 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     blue = colors.HexColor("#173d5b")
     three_model_layout = len(p["models"]) == 3
     style = ParagraphStyle("body", fontName="ReportFont",
-                           fontSize=9.35 if three_model_layout else 10.1,
-                           leading=13.0 if three_model_layout else 14.5,
-                           spaceAfter=7, textColor=ink)
+                           fontSize=9.35 if three_model_layout else 9.6,
+                           leading=13.0 if three_model_layout else 12.5,
+                           spaceAfter=7 if three_model_layout else 5, textColor=ink)
     page_one_body = ParagraphStyle("page-one-body", parent=style,
-                                   fontSize=9.0 if three_model_layout else 10.0,
-                                   leading=12.2 if three_model_layout else 14.0,
-                                   spaceAfter=5 if three_model_layout else 6)
+                                   fontSize=9.0 if three_model_layout else 9.2,
+                                   leading=12.2 if three_model_layout else 12.0,
+                                   spaceAfter=5 if three_model_layout else 4)
     heading = ParagraphStyle("heading", parent=style, fontName=bold_name, fontSize=11.5, leading=15,
-                             spaceBefore=11, spaceAfter=4, textColor=blue)
+                             spaceBefore=7, spaceAfter=3, textColor=blue)
     page_one_heading = ParagraphStyle("page-one-heading", parent=heading,
-                                      spaceBefore=7 if three_model_layout else 9)
+                                      spaceBefore=7)
     title_style = ParagraphStyle("title", parent=heading, fontSize=18, leading=22,
                                  spaceBefore=0, spaceAfter=2, textColor=blue)
     eyebrow = ParagraphStyle("eyebrow", parent=style, fontSize=9.1, leading=12,
@@ -524,7 +527,9 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                              page_one_model_heading if page == 0 and title.startswith("Model:") else
                                              page_one_heading if page == 0 else heading)
                     body_style_for_block = page_one_body if page == 0 else style
-                    story.extend([para(title, title_style_for_block), para(text, body_style_for_block)])
+                    story.append(para(title, title_style_for_block))
+                    if text:
+                        story.append(para(text, body_style_for_block))
             if title == "Submission details":
                 markdown.extend([f"## {title}", "", "| Property | Value |", "| --- | --- |"])
                 for row in submission_rows:
@@ -536,7 +541,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                 markdown.append("")
             else:
                 markdown.extend([f"## {title}", "", text, ""])
-            if page == 1 and i == 0:
+            if page == 1 and title == "Evaluation and comparison":
                 story.extend([grid(table, [128, 135, 138, 99], primary_rows), Spacer(1, 5)])
                 markdown.extend(markdown_table(table))
             if title == "Prediction errors (confusion matrix)" and error_table:
@@ -549,7 +554,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     SimpleDocTemplate(str(pdf), pagesize=A4, leftMargin=45, rightMargin=45,
                       topMargin=32, bottomMargin=36).build(story, onFirstPage=footer, onLaterPages=footer)
     pages = PdfReader(pdf).pages
-    reflection_page = next((i for i, page in enumerate(pages) if "Reflection - outside" in (page.extract_text() or "")), None)
+    reflection_page = next((i for i, page in enumerate(pages) if reflection_title in (page.extract_text() or "")), None)
     if reflection_page != 2:
         raise ValueError("Main report exceeded two pages; shorten narrative/metric table and regenerate in a fresh folder. PDF is not submission-ready.")
     (output_dir / "report.md").write_text("\n".join(markdown), encoding="utf-8")
