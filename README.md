@@ -4,12 +4,13 @@ A reusable Agent Skill for evidence-constrained tabular classification: diagnosi
 
 ## Installation
 
-Requires Python 3.10+ (tested with 3.12). After cloning/downloading this repository, copy the whole skill directory, including scripts and references, to `~/.agents/skills/tabular-classification-report`. Do not copy only SKILL.md. If the repository root is the skill directory, the local steps are:
+Requires Python 3.10+ (tested with 3.12). Confirm that `python3 --version` reports Python 3.10 or newer; otherwise, replace `python3` below with an installed Python 3.10+ interpreter, such as `python3.12`. After cloning/downloading this repository, copy the whole skill directory, including scripts and references, to `~/.agents/skills/tabular-classification-report`. Do not copy only SKILL.md. If the repository root is the skill directory, the local steps are:
 
 ```bash
 mkdir -p ~/.agents/skills
 cp -R /absolute/path/to/cloned-skill ~/.agents/skills/tabular-classification-report
 cd ~/.agents/skills/tabular-classification-report
+python3 --version
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
