@@ -59,8 +59,20 @@ For a visible self-test, run `python tests/smoke_demo.py --output-dir /absolute/
 
 Lock seals, optional approval records and one-time receipts are auditable local workflow controls, not tamper-proof security. A failed attempt after test access remains recorded; do not remove it and rerun. Load only trusted local joblib artifacts.
 
-## Submission notes
+## Report generation
 
-The full skill is published at [Always-Starter/tabular-classification-report](https://github.com/Always-Starter/tabular-classification-report) for instructors to clone and inspect. Do not commit runtime output folders; `.gitignore` excludes environments, trained models and generated results. Supply the repository URL and your own details in the actual report metadata. The report is automatically generated as a fixed two-page main report followed by Reflection. When the submission format calls for identification details on a separate first page, set `identification_cover_page` to `true`; that optional cover precedes, and does not count toward, the two-page main report. The student must verify an output themselves and confirm the Reflection before submission.
+The skill generates a fixed two-page main report followed by Reflection. When identification details are required on a separate first page, set `identification_cover_page` to `true`; the optional cover precedes and does not count toward the two-page main-report limit.
 
-The skill remains generic: do not describe a supplied dataset as customer churn or assign business meanings without source evidence. Four checkpoints, nested CV and a Model Lock are implementation choices; IN6227 grades justified reasoning, reusable implementation, report and Reflection.
+Repository URLs, student identification and other submission-specific details must be supplied through report metadata rather than hard-coded into the skill.
+
+## Design and human oversight
+
+The skill is designed to remain generic, reusable and evidence-constrained. It must not infer a dataset's application domain or assign business meanings to variables without supporting dataset metadata, task context or user-provided evidence.
+
+Four checkpoints, nested cross-validation and a Model Lock are implementation choices rather than explicit IN6227 requirements. They make the workflow auditable and separate model development from final evaluation. Model-family selection, preprocessing, tuning and final-family selection must be supported by recorded evidence rather than unsupported assumptions or post-hoc justification.
+
+The skill supports analysis but does not replace student judgement. The student remains responsible for reviewing the evidence, checking the generated report and confirming that the Reflection accurately represents their own oversight, decisions and learning before submission.
+
+## Repository hygiene and reproducibility
+
+The repository contains the reusable skill implementation, references and software tests. Runtime outputs, local environments, trained models and generated reports are excluded through `.gitignore` and should not be committed.
