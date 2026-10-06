@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate traceable Markdown and a two-page main PDF plus separate Reflection."""
+"""Generate traceable Markdown and a PDF with optional cover, two-page report and Reflection."""
 import argparse
 import re
 from pathlib import Path
@@ -25,8 +25,33 @@ def settings_text(settings):
                      for key, value in settings.items()) or "default settings"
 
 
+def sentence_fragment(value):
+    """Return prose suitable for joining before renderer-supplied punctuation."""
+    return str(value).strip().rstrip(".;")
+
+
+def decision_basis_text(basis):
+    """Render schema decision bases without implying a library default."""
+    labels = {
+        "conventional_default": "conventional baseline",
+        "dataset_specific_evidence": "dataset-specific evidence",
+        "user_domain_constraint": "user/domain constraint",
+        "invariant_rule": "invariant methodological rule",
+    }
+    return labels.get(basis, basis.replace("_", " "))
+
+
 def model_label(spec):
-    return spec["type"].replace("_", " ").capitalize()
+    labels = {
+        "logistic_regression": "Logistic Regression",
+        "random_forest": "Random Forest",
+        "extra_trees": "Extra Trees",
+        "decision_tree": "Decision Tree",
+        "knn": "k-Nearest Neighbors",
+        "gaussian_nb": "Gaussian Naive Bayes",
+        "support_vector_classifier": "Support Vector Classifier",
+    }
+    return labels.get(spec["type"], spec["type"].replace("_", " ").title())
 
 
 def preprocessing_text(config):
@@ -65,8 +90,8 @@ def fixed_param_rationale_text(spec, effective=None):
             value_basis = "exact-value source unknown"
         else:
             source = record["value_source"].replace("_", " ")
-            value_basis = f"exact-value source {source}: {record['value_rationale']}"
-        parts.append(f"{label} - {value_basis}; not tuned: {record['not_tuned_reason']}")
+            value_basis = f"exact-value source {source}: {sentence_fragment(record['value_rationale'])}"
+        parts.append(f"{label} - {value_basis}; not tuned: {sentence_fragment(record['not_tuned_reason'])}")
     return "Fixed-parameter rationale: " + " | ".join(parts)
 
 
@@ -98,10 +123,11 @@ def threshold_policy_text(plan, models):
     if not policy:
         return "Multiclass prediction uses maximum predicted probability (argmax)."
     if policy["mode"] == "fixed":
-        source = policy["value_source"].replace("_", " ")
-        rationale = policy["value_rationale"] or "exact-value rationale unknown"
-        return (f"Fixed threshold {policy['value']} was predeclared before development; source: {source}; "
-                f"rationale: {rationale}; not tuned: {policy['not_tuned_reason']}")
+        basis = decision_basis_text(policy["value_source"])
+        rationale = sentence_fragment(policy["value_rationale"] or "exact-value rationale unknown")
+        not_tuned = sentence_fragment(policy["not_tuned_reason"])
+        return (f"Fixed threshold {policy['value']} was predeclared before development; basis: {basis}; "
+                f"rationale: {rationale}; not tuned: {not_tuned}")
     if policy["mode"] == "model_default":
         return ("The predeclared model-default class decision was retained rather than threshold-tuned; "
                 f"{policy['not_tuned_reason']}")
@@ -111,16 +137,54 @@ def threshold_policy_text(plan, models):
             "Held-out data did not select or revise them")
 
 
-def model_selection_text(selection):
+def model_selection_text(selection, model_labels=None):
     if not selection:
         return "Legacy run: executable final-family selection evidence was not recorded."
+    model_labels = model_labels or {}
     policy = selection["policy"]
-    contenders = ", ".join(selection["practical_tie_contenders"])
-    applied = ", ".join(item.replace("_", " ") for item in selection["applied_tie_breakers"])
-    return (f"Predeclared outer-CV {selection['metric'].replace('_', ' ')} policy "
-            f"({selection['direction']}); practical-tie tolerance {policy['practical_tie_tolerance']}; "
-            f"contenders: {contenders}; tie-breakers applied: {applied or 'none'}; "
-            f"selected: {selection['selected_model']}.")
+    metric = selection["metric"].replace("_", "-")
+    tolerance = policy["practical_tie_tolerance"]
+    contenders = selection["practical_tie_contenders"]
+    candidates = {item["model"]: item for item in selection["candidates"]}
+    selected = selection["selected_model"]
+
+    def label(name):
+        return model_labels.get(name, name.replace("_", " ").capitalize())
+
+    tie_breaker_labels = {
+        "lower_outer_std": "lower outer-fold SD",
+        "declared_preference_order": "declared model-preference order",
+    }
+    applied = [tie_breaker_labels.get(item, item.replace("_", " "))
+               for item in selection["applied_tie_breakers"]]
+
+    if len(contenders) == 1:
+        item = candidates[selected]
+        return (f"Under the predeclared outer-CV {metric} policy, {label(selected)} alone fell within the "
+                f"practical-tie tolerance of {tolerance:g} (mean {item['mean']:.5f}, SD {item['std']:.5f}) "
+                "and was selected without a tie-breaker.")
+
+    if len(contenders) == 2:
+        other = next(name for name in contenders if name != selected)
+        selected_item, other_item = candidates[selected], candidates[other]
+        difference = abs(selected_item["mean"] - other_item["mean"])
+        if applied == ["lower outer-fold SD"]:
+            selection_reason = (f"the predeclared lower outer-fold SD tie-breaker "
+                                f"({selected_item['std']:.5f} vs {other_item['std']:.5f})")
+        else:
+            selection_reason = "the predeclared " + " and then ".join(applied) + " tie-breaker"
+        return (f"The outer-CV mean {metric} difference between {label(selected)} and {label(other)} was "
+                f"{difference:.5f}, within the predeclared practical-tie tolerance of {tolerance:g}. "
+                f"{label(selected)} was therefore selected using {selection_reason}.")
+
+    contender_text = ", ".join(
+        f"{label(name)} (mean {candidates[name]['mean']:.5f}, SD {candidates[name]['std']:.5f})"
+        for name in contenders
+    )
+    selection_reason = " and then ".join(applied) if applied else "no tie-breaker"
+    return (f"Under the predeclared outer-CV {metric} policy, these models were within the practical-tie "
+            f"tolerance of {tolerance:g}: {contender_text}. {label(selected)} was selected using the "
+            f"predeclared {selection_reason} rule.")
 
 
 def confusion_text(matrix, classes, positive_class=None):
@@ -244,11 +308,32 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         draft_note = " | DRAFT - Reflection pending"
     else:
         draft_note = ""
-    sections = [[], [], []]
+    identification_cover = bool(n.get("identification_cover_page", False))
+    report_first_page = 1 if identification_cover else 0
+    report_second_page = report_first_page + 1
+    reflection_group = report_second_page + 1
+    sections = [[] for _ in range(reflection_group + 1)]
     def add(page, title, text):
         sections[page].append((title, str(text)))
 
-    add(0, "Tabular classification report", "IN6227-Assignment-1 | Variant-2" + draft_note)
+    if identification_cover:
+        identification_rows = [
+            ["Full name", meta.get("full_name") or "[not supplied]"],
+            ["Matriculation number", meta.get("matric_number") or "[not supplied]"],
+        ]
+        skill_rows = [
+            ["LLM model/version", meta.get("llm_model_version") or "[not supplied]"],
+            ["Interface", meta.get("llm_interface") or "[not supplied]"],
+            ["Skill repository", meta.get("repository_url") or "[not supplied]"],
+        ]
+        add(0, "IN6227-Assignment-1", "Variant-2")
+        add(0, "", "\n".join(
+            f"{key}: {value}" for key, value in identification_rows))
+        add(report_first_page, "Tabular classification report", "")
+    else:
+        identification_rows = []
+        skill_rows = []
+        add(report_first_page, "Tabular classification report", "IN6227-Assignment-1 | Variant-2" + draft_note)
     if test:
         preferred = lk["review"]["preferred_model"]
         if preferred not in vr["models"]:
@@ -268,7 +353,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                             if selected else
                             f"Development-only comparison. Primary measure: {metric.replace('_', ' ')}.")
         summary = summary_emphasis + " No independent held-out result is claimed."
-    add(0, "At a glance", summary)
+    add(report_first_page, "At a glance", summary)
     submission_rows = [
         ["Name", meta.get("full_name") or "[not supplied]",
          "Matriculation number", meta.get("matric_number") or "[not supplied]"],
@@ -276,21 +361,31 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
          "Interface", meta.get("llm_interface") or "[not supplied]"],
         ["Skill repository", meta.get("repository_url") or "[not supplied]", "", ""],
     ]
-    add(0, "Submission details", "\n".join(
-        f"{row[0]}: {row[1]}" + (f" | {row[2]}: {row[3]}" if row[2] else "")
-        for row in submission_rows))
+    if identification_cover:
+        add(report_first_page, "Skill information", "\n".join(f"{key}: {value}" for key, value in skill_rows))
+    else:
+        add(report_first_page, "Submission details", "\n".join(
+            f"{row[0]}: {row[1]}" + (f" | {row[2]}: {row[3]}" if row[2] else "")
+            for row in submission_rows))
     class_counts = "; ".join(f"{label}: {count:,}" for label, count in tr["class_counts"].items())
-    add(0, "Data exploration and cleaning", f"Training: {tr['input_rows']:,} rows; {tr['eligible_rows']:,} labelled rows; "
+    add(report_first_page, "Data exploration and cleaning", f"Training: {tr['input_rows']:,} rows; {tr['eligible_rows']:,} labelled rows; "
         f"{tr['missing_targets']} missing targets excluded. Target: {p['target']}; class counts: {class_counts}. "
         f"Predictors retained: {len(p['features'])}. Exact duplicate rows: {dg['duplicates']['exact_duplicate_rows']}.\n" + n["exploration"])
-    add(0, "Preprocessing and feature decisions", n["preprocessing"] + " " + n["features"])
+    add(report_first_page, "Preprocessing and feature decisions", n["preprocessing"] + " " + n["features"])
     for spec in p["models"]:
         model = vr["models"][spec["name"]]
         effective = model.get("effective_fixed_params", effective_fixed_params(p, spec))
         boundary = model.get("tuning_boundary", {})
-        add(0, f"Model: {model_labels[spec['name']]}", "Preparation: " + preprocessing_text(spec["preprocessing"])
-            + (f". Imbalance handling: {spec['imbalance_handling']['strategy'].replace('_', ' ')} "
-               f"({spec['imbalance_handling']['basis'].replace('_', ' ')})" if spec.get("imbalance_handling") else "")
+        imbalance = spec.get("imbalance_handling")
+        imbalance_labels = {
+            "fixed_class_weight": "fixed, predeclared class weighting",
+            "tuned_class_weight": "tuned class-weighting strategy",
+            "none": "none",
+        }
+        add(report_first_page, f"Model: {model_labels[spec['name']]}", "Preparation: " + preprocessing_text(spec["preprocessing"])
+            + (f". Imbalance handling: {imbalance_labels.get(imbalance['strategy'], imbalance['strategy'].replace('_', ' '))}"
+               + (f"; basis: {decision_basis_text(imbalance['basis'])}" if imbalance["strategy"] != "fixed_class_weight" else "")
+               if imbalance else "")
             + ". Selected settings: " + settings_text(model["best_params"])
             + ". Fixed settings: " + settings_text(effective)
             + ". Execution controls: " + settings_text(
@@ -298,12 +393,13 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
             + fixed_param_rationale_text(spec, effective) + "."
             + (" Search-boundary interpretation: " + tuning_boundary_text(boundary, spec["grid"]) + "."
                if boundary else ""))
-    add(0 if len(p["models"]) == 3 else 1, "Model choice and stopping rules", n["model_rationale"]
+    add(report_first_page if len(p["models"]) == 3 else report_second_page,
+        "Model choice and stopping rules", n["model_rationale"]
         + f" The declared search used {tr['planned_fits']} planned fits across baseline and sensitivity analyses; "
         + "outer folds did not trigger grid expansion or a change of primary metric. Sensitivity variants were "
         + "interpreted as robustness evidence only and were not eligible for selection or locking. "
-        + model_selection_text(selection))
-    add(1, "Evaluation and comparison", f"Primary metric: {metric.replace('_', ' ')} "
+        + model_selection_text(selection, model_labels))
+    add(report_second_page, "Evaluation and comparison", f"Primary metric: {metric.replace('_', ' ')} "
         f"({'lower' if metric == 'log_loss' else 'higher'} is better). "
         f"Nested CV: {p['cv']['strategy']}, {p['cv']['outer_splits']} outer / {p['cv']['inner_splits']} inner folds; seed {p['seed']}. "
         "All learned preprocessing is fitted within folds. All classifiers share validation splits. "
@@ -318,7 +414,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     displayed_metrics = [metric, *p["metrics"]["secondary"][:3]]
     omitted_metrics = p["metrics"]["secondary"][3:]
     if omitted_metrics:
-        add(1, "Additional prespecified metrics", "Full fold and held-out results for "
+        add(report_second_page, "Additional prespecified metrics", "Full fold and held-out results for "
             + ", ".join(omitted_metrics) + " are retained in the verified result files; "
             "the compact PDF table shows the primary and first three secondary metrics in plan order.")
     table = [["Model", "Metric", "Nested CV mean (SD)", "Held-out"]]
@@ -340,14 +436,14 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                              for name, model in vr["models"].items() if any(f["undefined_metrics"] for f in model["fold_results"])}
     if undefined_development:
         reasons = "; ".join(f"{name}: {', '.join(values)}" for name, values in undefined_development.items())
-        add(1, "Undefined development scores", reasons
+        add(report_second_page, "Undefined development scores", reasons
             + ". A secondary-metric summary is N/A if any fold is undefined; no partial-fold average is substituted.")
     error_table = None
     if test:
         if len(test["class_order"]) == 2 and p.get("positive_class") in test["class_order"]:
             pos = test["class_order"].index(p["positive_class"])
             neg = 1 - pos
-            add(1, "Prediction errors (confusion matrix)",
+            add(report_second_page, "Prediction errors (confusion matrix)",
                 f"Positive class: {p['positive_class']}. "
                 "TN = true negatives, FP = false positives, FN = false negatives, TP = true positives.")
             error_table = [["Model", "TN", "FP", "FN", "TP"]]
@@ -356,29 +452,29 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                 error_table.append([model_labels[name], f"{matrix[neg][neg]:,}", f"{matrix[neg][pos]:,}",
                                     f"{matrix[pos][neg]:,}", f"{matrix[pos][pos]:,}"])
                 if model["undefined_metrics"]:
-                    add(1, f"Undefined held-out metrics: {model_labels[name]}", settings_text(model["undefined_metrics"]))
+                    add(report_second_page, f"Undefined held-out metrics: {model_labels[name]}", settings_text(model["undefined_metrics"]))
         else:
             for name, model in test["models"].items():
-                add(1, f"Prediction errors (confusion matrix): {model_labels[name]}",
+                add(report_second_page, f"Prediction errors (confusion matrix): {model_labels[name]}",
                     confusion_text(model["confusion_matrix"], test["class_order"], p.get("positive_class"))
                     + (" Undefined metrics: " + settings_text(model["undefined_metrics"]) + "."
                        if model["undefined_metrics"] else ""))
     if evidence_summary:
-        add(1, "Findings and discussion", "FACT: " + evidence_summary["fact"]
+        add(report_second_page, "Findings and discussion", "FACT: " + evidence_summary["fact"]
             + " INTERPRETATION: " + evidence_summary["interpretation"]
             + " DECISION: " + evidence_summary["decision"])
-        add(1, "Limitations", "LIMITATION/UNKNOWN: " + evidence_summary["limitation_unknown"]
+        add(report_second_page, "Limitations", "LIMITATION/UNKNOWN: " + evidence_summary["limitation_unknown"]
             + " FUTURE WORK: " + evidence_summary["future_work"]
             + f" Selection-eligible development baseline: {variant}.")
     else:
-        add(1, "Findings and discussion", n["findings"])
-        add(1, "Limitations", n["limitations"] + f" Selection-eligible development baseline: {variant}.")
+        add(report_second_page, "Findings and discussion", n["findings"])
+        add(report_second_page, "Limitations", n["limitations"] + f" Selection-eligible development baseline: {variant}.")
     reflection_title = n.get("reflection_title", "Reflection - outside the two-page report limit")
     reflection_subtitle = n.get(
         "reflection_subtitle",
         "Human review draft" if not n["human_reflection_confirmed"] else "Human-confirmed Reflection",
     )
-    add(2, reflection_title, reflection_subtitle)
+    add(reflection_group, reflection_title, reflection_subtitle)
     reflection_titles = {
         "human_oversight": "Human in the Loop",
         "challenged_decision": "Critical Evaluation",
@@ -386,7 +482,7 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         "future_changes": "Future Changes",
     }
     for k in reflection_keys:
-        add(2, reflection_titles[k], n["reflection"][k])
+        add(reflection_group, reflection_titles[k], n["reflection"][k])
     # Arithmetic aids stay in the manifest; the student's Reflection must describe
     # a check they actually performed, not a machine-generated verification claim.
 
@@ -412,18 +508,24 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
     three_model_layout = len(p["models"]) == 3
     style = ParagraphStyle("body", fontName="ReportFont",
                            fontSize=9.35 if three_model_layout else 9.6,
-                           leading=13.0 if three_model_layout else 12.5,
-                           spaceAfter=7 if three_model_layout else 5, textColor=ink)
+                           leading=13.0 if three_model_layout else 12.3,
+                           spaceAfter=7 if three_model_layout else 4.5, textColor=ink)
     page_one_body = ParagraphStyle("page-one-body", parent=style,
                                    fontSize=9.0 if three_model_layout else 9.2,
                                    leading=12.2 if three_model_layout else 12.0,
                                    spaceAfter=5 if three_model_layout else 4)
     heading = ParagraphStyle("heading", parent=style, fontName=bold_name, fontSize=11.5, leading=15,
-                             spaceBefore=7, spaceAfter=3, textColor=blue)
+                             spaceBefore=7 if three_model_layout else 6.5, spaceAfter=3, textColor=blue)
     page_one_heading = ParagraphStyle("page-one-heading", parent=heading,
                                       spaceBefore=7)
     title_style = ParagraphStyle("title", parent=heading, fontSize=18, leading=22,
                                  spaceBefore=0, spaceAfter=2, textColor=blue)
+    cover_title = ParagraphStyle("cover-title", parent=title_style, fontSize=27, leading=33,
+                                 alignment=1, spaceBefore=0, spaceAfter=13, textColor=colors.black)
+    cover_badge = ParagraphStyle("cover-badge", parent=style, fontName=bold_name, fontSize=12.5,
+                                 leading=16, alignment=1, textColor=colors.black, spaceAfter=0)
+    cover_detail = ParagraphStyle("cover-detail", parent=style, fontSize=14, leading=19,
+                                  alignment=1, textColor=colors.black, spaceAfter=10)
     eyebrow = ParagraphStyle("eyebrow", parent=style, fontSize=9.1, leading=12,
                              textColor=colors.HexColor("#526574"), spaceAfter=3)
     model_heading = ParagraphStyle("model-heading", parent=heading, fontSize=10.5, leading=14,
@@ -449,11 +551,12 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         cells = [[para(cell, table_header if row == 0 else table_primary if row in highlighted else compact)
                   for cell in values] for row, values in enumerate(rows)]
         t = Table(cells, colWidths=widths, repeatRows=1, hAlign="LEFT")
+        cell_padding = 5 if three_model_layout else 4
         rules = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dce8f0")),
                  ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f8fa")]),
                  ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                 ("TOPPADDING", (0, 0), (-1, -1), 5),
-                 ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                 ("TOPPADDING", (0, 0), (-1, -1), cell_padding),
+                 ("BOTTOMPADDING", (0, 0), (-1, -1), cell_padding),
                  ("LINEBELOW", (0, 0), (-1, 0), .6, colors.HexColor("#9eb4c4"))]
         rules.extend(("BACKGROUND", (0, row), (-1, row), colors.HexColor("#e8f2f8"))
                      for row in highlighted)
@@ -469,8 +572,14 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
         if page:
             story.append(PageBreak())
         for i, (title, text) in enumerate(blocks):
-            if page == 0 and i == 0:
-                story.extend([para(title, title_style), para(text, eyebrow)])
+            if identification_cover and page == 0 and i == 0:
+                story.append(Spacer(1, 92))
+                story.append(para(title, cover_title))
+                story.extend([para(text, cover_badge), Spacer(1, 92)])
+            elif i == 0 and page == report_first_page:
+                story.append(para(title, title_style))
+                if text:
+                    story.append(para(text, eyebrow))
             elif title == "At a glance":
                 story.append(para(title, page_one_heading))
                 callout_markup = escape(text).replace(
@@ -509,6 +618,36 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                     ("LINEBELOW", (0, 0), (-1, -1), .35, colors.HexColor("#c6d4de")),
                 ]))
                 story.append(metadata_table)
+            elif identification_cover and page == 0 and not title:
+                for key, value in identification_rows:
+                    story.append(para_markup(
+                        f'<font name="{bold_name}">{escape(key)}:</font> {escape(value)}',
+                        cover_detail,
+                    ))
+            elif title in {"Identification details", "Skill information"}:
+                rows = identification_rows if title == "Identification details" else skill_rows
+                heading_style = page_one_heading if page == report_first_page else heading
+                story.append(para(title, heading_style))
+                meta_cells = []
+                for key, value in rows:
+                    if key == "Skill repository" and value != "[not supplied]":
+                        rendered_value = para_markup(
+                            f'<link href="{escape(value)}" color="#176a9a"><u>{escape(value)}</u></link>',
+                            compact,
+                        )
+                    else:
+                        rendered_value = para(value, compact)
+                    meta_cells.append([para(key, table_header), rendered_value])
+                metadata_table = Table(meta_cells, colWidths=[150, 350], hAlign="LEFT")
+                metadata_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8f2f8")),
+                    ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#f7f9fb")]),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("LINEBELOW", (0, 0), (-1, -1), .35, colors.HexColor("#c6d4de")),
+                ]))
+                story.append(metadata_table)
             elif title == "Findings and discussion":
                 story.append(para(title, heading))
                 callout = Table([[para(text, style)]], colWidths=[500], hAlign="LEFT")
@@ -520,13 +659,13 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                                             ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
                 story.append(callout)
             else:
-                if page == 2 and i > 0:
+                if page == reflection_group and i > 0:
                     story.extend([para(title, reflection_heading), para(text, reflection_body)])
                 else:
                     title_style_for_block = (title_style if i == 0 else
-                                             page_one_model_heading if page == 0 and title.startswith("Model:") else
-                                             page_one_heading if page == 0 else heading)
-                    body_style_for_block = page_one_body if page == 0 else style
+                                             page_one_model_heading if page == report_first_page and title.startswith("Model:") else
+                                             page_one_heading if page == report_first_page else heading)
+                    body_style_for_block = page_one_body if page == report_first_page else style
                     story.append(para(title, title_style_for_block))
                     if text:
                         story.append(para(text, body_style_for_block))
@@ -539,9 +678,21 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                     if row[2]:
                         markdown.append(f"| {row[2]} | {row[3]} |")
                 markdown.append("")
+            elif identification_cover and page == 0 and not title:
+                markdown.extend(["| Property | Value |", "| --- | --- |"])
+                markdown.extend(f"| {key} | {value} |" for key, value in identification_rows)
+                markdown.append("")
+            elif title in {"Identification details", "Skill information"}:
+                rows = identification_rows if title == "Identification details" else skill_rows
+                markdown.extend([f"## {title}", "", "| Property | Value |", "| --- | --- |"])
+                for key, value in rows:
+                    rendered_value = (f"[{value}]({value})" if key == "Skill repository"
+                                      and value != "[not supplied]" else value)
+                    markdown.append(f"| {key} | {rendered_value} |")
+                markdown.append("")
             else:
                 markdown.extend([f"## {title}", "", text, ""])
-            if page == 1 and title == "Evaluation and comparison":
+            if page == report_second_page and title == "Evaluation and comparison":
                 story.extend([grid(table, [128, 135, 138, 99], primary_rows), Spacer(1, 5)])
                 markdown.extend(markdown_table(table))
             if title == "Prediction errors (confusion matrix)" and error_table:
@@ -555,11 +706,12 @@ def generate(training, diagnosis, narrative, output_dir, variant="baseline", tes
                       topMargin=32, bottomMargin=36).build(story, onFirstPage=footer, onLaterPages=footer)
     pages = PdfReader(pdf).pages
     reflection_page = next((i for i, page in enumerate(pages) if reflection_title in (page.extract_text() or "")), None)
-    if reflection_page != 2:
+    if reflection_page != reflection_group:
         raise ValueError("Main report exceeded two pages; shorten narrative/metric table and regenerate in a fresh folder. PDF is not submission-ready.")
     (output_dir / "report.md").write_text("\n".join(markdown), encoding="utf-8")
     renderer_hash = sha(Path(__file__))
-    manifest = {"main_pages": 2, "total_pages": len(pages), "draft": draft,
+    manifest = {"cover_pages": 1 if identification_cover else 0,
+                "main_pages": 2, "total_pages": len(pages), "draft": draft,
                 "missing_metadata": missing, "human_reflection_confirmed": n["human_reflection_confirmed"],
                 "training_results_sha256": sha(training), "narrative_sha256": sha(narrative),
                 "test_results_sha256": sha(test_results) if test_results else None,

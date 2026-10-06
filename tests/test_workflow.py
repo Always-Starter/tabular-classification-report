@@ -25,7 +25,7 @@ from approve_model_lock import approve
 from evaluate_holdout import evaluate
 from verify_results import verify, verify_training
 from diagnose_training import diagnose
-from generate_report import generate, validate_distribution_language
+from generate_report import decision_basis_text, generate, model_selection_text, validate_distribution_language
 from audit_training_run import audit
 
 
@@ -46,6 +46,7 @@ def frame(n=120, multiclass=False):
 class Contracts(unittest.TestCase):
     def test_schema_v6_policy_provenance_and_legacy_readability(self):
         p = example()
+        self.assertEqual(decision_basis_text("conventional_default"), "conventional baseline")
         self.assertEqual(validate(p)["threshold_policy"]["value_source"], "conventional_default")
         self.assertEqual(p["cv"]["selection_basis"], "conventional_default")
         self.assertEqual({item["basis"] for item in p["decision_trace"]},
@@ -212,7 +213,23 @@ class Contracts(unittest.TestCase):
         }
         self.assertEqual(model_selection_evidence(p, models)["selected_model"], "tree")
         p["model_selection_policy"]["practical_tie_tolerance"] = .02
-        self.assertEqual(model_selection_evidence(p, models)["selected_model"], "linear")
+        tied = model_selection_evidence(p, models)
+        self.assertEqual(tied["selected_model"], "linear")
+        rendered = model_selection_text(tied, {"linear": "Logistic regression", "tree": "Decision tree"})
+        self.assertIn("difference between Logistic regression and Decision tree was 0.01000", rendered)
+        self.assertIn("practical-tie tolerance of 0.02", rendered)
+        self.assertIn("lower outer-fold SD tie-breaker (0.05000 vs 0.08000)", rendered)
+        three_way = copy.deepcopy(tied)
+        three_way["candidates"].append({"model": "forest", "mean": .805, "std": .06,
+                                         "preference_rank": 3, "gap_from_numerical_best": .005,
+                                         "within_practical_tie": True})
+        three_way["practical_tie_contenders"].append("forest")
+        rendered = model_selection_text(
+            three_way,
+            {"linear": "Logistic regression", "tree": "Decision tree", "forest": "Random forest"},
+        )
+        self.assertIn("Random forest (mean 0.80500, SD 0.06000)", rendered)
+        self.assertIn("Logistic regression was selected", rendered)
         p["metrics"]["primary"] = "log_loss"
         models = {
             "linear": {"outer_summary": {"log_loss": {"mean": .42, "std": .03}}},
@@ -222,6 +239,9 @@ class Contracts(unittest.TestCase):
         evidence = model_selection_evidence(p, models)
         self.assertEqual(evidence["direction"], "minimize")
         self.assertEqual(evidence["selected_model"], "linear")
+        rendered = model_selection_text(evidence, {"linear": "Logistic regression", "tree": "Decision tree"})
+        self.assertIn("Logistic regression alone fell within", rendered)
+        self.assertIn("selected without a tie-breaker", rendered)
 
     def test_nonlast_positive_class_metrics(self):
         p = example()
@@ -578,17 +598,21 @@ class Workflow(unittest.TestCase):
             self.assertNotIn("SHA-256 evidence accompany this report", report)
             self.assertIn("Prediction errors (confusion matrix)", report)
             self.assertIn("Positive class: no. TN = true negatives", report)
-            self.assertIn("| Logistic regression | F1 (no) |", report)
+            self.assertIn("| Logistic Regression | F1 (no) |", report)
             self.assertIn("|  | precision (no) |", report)
             self.assertIn("## Human in the Loop", report)
             self.assertIn("## Critical Evaluation", report)
             self.assertIn("## Trustworthiness", report)
             self.assertIn("endpoint of a two-value grid", report)
             self.assertIn("Fixed-parameter rationale", report)
+            self.assertIn("Imbalance handling: none; basis: dataset-specific evidence", report)
             self.assertIn("FACT:", report)
             self.assertIn("LIMITATION/UNKNOWN:", report)
             self.assertIn("FUTURE WORK:", report)
             self.assertIn("Fixed threshold 0.5 was predeclared", report)
+            self.assertIn("basis: conventional baseline", report)
+            self.assertNotIn(".;", report)
+            self.assertNotIn("..", report)
             self.assertIn("| Name | Example Student |", report)
             self.assertIn("| Matriculation number | A1234567X |", report)
             self.assertIn("| Skill repository | [https://example.com/example-skill](https://example.com/example-skill) |", report)
@@ -600,6 +624,21 @@ class Workflow(unittest.TestCase):
             pdf_text = "\n".join(page.extract_text() or ""
                                  for page in PdfReader(tmp / "report/report.pdf").pages)
             self.assertIn("https://example.com/example-skill", pdf_text)
+            narrative["identification_cover_page"] = True
+            write_json(tmp / "cover-narrative.json", narrative)
+            cover_manifest = generate(
+                self.development / "training_results.json", tmp / "diagnosis.json",
+                tmp / "cover-narrative.json", tmp / "cover-report",
+                test_results=tmp / "out/test_results.json", lock=lock)
+            self.assertEqual(cover_manifest["cover_pages"], 1)
+            self.assertEqual(cover_manifest["main_pages"], 2)
+            cover_pages = [page.extract_text() or ""
+                           for page in PdfReader(tmp / "cover-report/report.pdf").pages]
+            self.assertIn("IN6227-Assignment-1", cover_pages[0])
+            self.assertIn("Example Student", cover_pages[0])
+            self.assertIn("A1234567X", cover_pages[0])
+            self.assertIn("Tabular classification report", cover_pages[1])
+            self.assertIn("Reflection", cover_pages[3])
             self.assertNotIn("Automated verification aid", report)
             self.assertNotIn('"numeric_imputer"', report)
             locked_hashes = read_json(lock)["code_sha256"]
@@ -717,7 +756,7 @@ class Workflow(unittest.TestCase):
                                 tmp / "report", test_results=tmp / "out/test_results.json", lock=lock)
             self.assertEqual(manifest["main_pages"], 2)
             report = (tmp / "report/report.md").read_text(encoding="utf-8")
-            for name in ("Logistic regression", "Decision tree", "Random forest"):
+            for name in ("Logistic Regression", "Decision Tree", "Random Forest"):
                 self.assertIn(f"| {name} | F1 (no) |", report)
             self.assertIn("Additional prespecified metrics", report)
             self.assertIn("|  | precision (no) |", report)
